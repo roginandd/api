@@ -1,4 +1,5 @@
 .env
-vista-37a9b-firebase-adminsdk-fbsvc-fa92788e85.json
-
+.venv/
 __pycache__/
+*.pyc
+vista-37a9b-firebase-adminsdk-fbsvc-fa92788e85.json
