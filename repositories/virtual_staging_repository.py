@@ -63,18 +63,7 @@ class VirtualStagingRepository(BaseRepository[VirtualStaging]):
             List of (session_id, VirtualStaging) tuples
         """
         return self.query('user_id', '==', user_id)
-    
-    def get_sessions_by_status(self, status: StagingStatus) -> List[tuple[str, VirtualStaging]]:
-        """
-        Get all sessions with a specific status
-        
-        Args:
-            status: StagingStatus enum value
-        
-        Returns:
-            List of (session_id, VirtualStaging) tuples
-        """
-        return self.query('status', '==', status.value)
+
     
     def update_session(self, session: VirtualStaging) -> VirtualStaging:
         """
@@ -88,28 +77,6 @@ class VirtualStagingRepository(BaseRepository[VirtualStaging]):
         """
         return self.update(session.session_id, session)
     
-    def update_status(self, session_id: str, status: StagingStatus, error_message: Optional[str] = None) -> bool:
-        """
-        Update session status
-        
-        Args:
-            session_id: Session ID
-            status: New status
-            error_message: Optional error message if status is FAILED
-        
-        Returns:
-            True if successful
-        """
-        update_data = {
-            'status': status.value,
-            'updated_at': VirtualStaging.from_dict({'session_id': session_id}).updated_at.isoformat()
-        }
-        
-        if error_message:
-            update_data['error_message'] = error_message
-        
-        self.collection.document(session_id).update(update_data)
-        return True
     
     def update_generated_image(self, session_id: str, image_url: str) -> bool:
         """
