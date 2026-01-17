@@ -9,10 +9,9 @@ from repositories.virtual_staging_repository import VirtualStagingRepository
 class PropertyRepository(BaseRepository[Property]):
     """Repository for managing properties"""
     
-    virtual_staging_repo: VirtualStagingRepository = VirtualStagingRepository()
-
     def __init__(self):
         super().__init__('properties')
+        self.virtual_staging_repo = VirtualStagingRepository()
     
     def to_model(self, data: Dict[str, Any]) -> Property:
         """Convert Firestore document to Property model"""
