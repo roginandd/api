@@ -26,13 +26,12 @@ def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def save_uploaded_file(file) -> str:
+def save_uploaded_file(file, session_id: str = None) -> str:
     """Save uploaded file and return file path"""
     if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        # Add timestamp to make filename unique
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_')
-        filename = timestamp + filename
+        # Use session_id for consistent filename if provided, otherwise use timestamp
+        filename = f"original_{session_id}.png"
+
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         file.save(filepath)
         return filepath
@@ -96,12 +95,7 @@ def create_session() -> Tuple[Dict[str, Any], int]:
         if file.filename == '':
             return {'error': 'No image file selected'}, 400
         
-        # Validate and save image
-        image_path = save_uploaded_file(file)
-        if not image_path:
-            return {'error': 'Invalid image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
-        
-        # Get form data
+        # Get form data first to validate required fields
         property_id = request.form.get('property_id', type=int)
         user_id = request.form.get('user_id', type=int)
         room_name = request.form.get('room_name', type=str)
@@ -110,9 +104,17 @@ def create_session() -> Tuple[Dict[str, Any], int]:
         color_scheme = request.form.get('color_scheme', type=str)
         specific_request = request.form.get('specific_request', type=str)
         
-        # Validate required fields
+        # Validate required fields before saving file
         if not all([property_id, user_id, room_name, style, furniture_theme]):
             return {'error': 'Missing required fields: property_id, user_id, room_name, style, furniture_theme'}, 400
+        
+        # Generate session_id FIRST
+        session_id = generate_session_id()
+        
+        # Validate and save image with session_id in filename
+        image_path = save_uploaded_file(file, session_id=session_id)
+        if not image_path:
+            return {'error': 'Invalid image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
         
         # Validate enums
         try:
@@ -130,14 +132,13 @@ def create_session() -> Tuple[Dict[str, Any], int]:
             specific_request=specific_request
         )
         
-        # Generate session
-        session_id = generate_session_id()
+        # Create session with the saved file path
         staging = vs_service.create_staging_session(
             session_id=session_id,
             property_id=property_id,
             user_id=user_id,
             room_name=room_name,
-            original_image_key=image_path,
+            original_image_path=image_path,
             staging_parameters=staging_params
         )
         
@@ -169,7 +170,8 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         "style": str (optional),
         "furniture_theme": str (optional),
         "color_scheme": str (optional),
-        "specific_request": str (optional)
+        "specific_request": str (optional),
+        "user_message": str (optional - user's request for chat history)
     }
     """
     try:
@@ -181,15 +183,30 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         if file.filename == '':
             return {'error': 'No image file selected'}, 400
         
-        # Validate and save main image
-        image_path = save_uploaded_file(file)
-        if not image_path:
-            return {'error': 'Invalid image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
+        # Get session_id first
+        session_id = request.form.get('session_id', type=str)
+        if not session_id:
+            return {'error': 'Missing required field: session_id'}, 400
         
         # Get custom_prompt (required)
         custom_prompt = request.form.get('custom_prompt', type=str)
         if not custom_prompt or custom_prompt.strip() == '':
             return {'error': 'Missing required field: custom_prompt'}, 400
+        
+        # Get optional user message for chat history
+        user_message = request.form.get('user_message', type=str)
+        
+        # Validate and save main image with session_id
+        image_path = save_uploaded_file(file, session_id)
+        if not image_path:
+            return {'error': 'Invalid image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
+        
+        # Get form data
+        style = request.form.get('style', type=str)
+        furniture_theme = request.form.get('furniture_theme', type=str)
+        color_scheme = request.form.get('color_scheme', type=str)
+        specific_request = request.form.get('specific_request', type=str)
+
         
         # Handle optional mask image for specific area/point
         mask_image_path = None
@@ -199,17 +216,6 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
                 mask_image_path = save_uploaded_file(mask_file)
                 if not mask_image_path:
                     return {'error': 'Invalid mask image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
-        
-        # Get form data
-        session_id = request.form.get('session_id', type=str)
-        style = request.form.get('style', type=str)
-        furniture_theme = request.form.get('furniture_theme', type=str)
-        color_scheme = request.form.get('color_scheme', type=str)
-        specific_request = request.form.get('specific_request', type=str)
-        
-        # Validate required fields
-        if not session_id:
-            return {'error': 'Missing required field: session_id'}, 400
         
         # Validate enums if provided
         style_enum = None
@@ -237,13 +243,13 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
                 specific_request=specific_request
             )
         
-        # Generate staging with custom prompt
+        # Generate staging with custom prompt and optional user message
         response = vs_service.generate_staging(
             session_id=session_id,
-            original_image_url=image_path,
             staging_parameters=staging_params,
             custom_prompt=custom_prompt,
-            mask_image_url=mask_image_path
+            mask_image_url=mask_image_path,
+            user_message=user_message
         )
         
         if not response:
@@ -310,7 +316,8 @@ def refine_staging() -> Tuple[Dict[str, Any], int]:
         "style": str,
         "furniture_theme": str,
         "color_scheme": str (optional),
-        "specific_request": str (optional)
+        "specific_request": str (optional),
+        "user_message": str (optional - user's refinement request for chat history)
     }
     """
     try:
@@ -333,6 +340,7 @@ def refine_staging() -> Tuple[Dict[str, Any], int]:
         furniture_theme = request.form.get('furniture_theme', type=str)
         color_scheme = request.form.get('color_scheme', type=str)
         specific_request = request.form.get('specific_request', type=str)
+        user_message = request.form.get('user_message', type=str)
         
         # Validate required fields
         if not all([session_id, style, furniture_theme]):
@@ -354,11 +362,11 @@ def refine_staging() -> Tuple[Dict[str, Any], int]:
             specific_request=specific_request
         )
         
-        # Refine staging
+        # Refine staging with optional user message for chat history
         response = vs_service.refine_staging(
             session_id=session_id,
-            original_image_url=image_path,
-            new_staging_parameters=new_params
+            new_staging_parameters=new_params,
+            user_message=user_message
         )
         
         if not response:
@@ -474,3 +482,239 @@ def get_color_palettes() -> Tuple[Dict[str, Any], int]:
         'message': 'Color palettes retrieved successfully',
         'color_palettes': palettes
     }, 200
+
+
+# ==================== VERSIONING OPERATIONS ====================
+@virtual_staging_bp.route('/save-change', methods=['POST'])
+def save_change() -> Tuple[Dict[str, Any], int]:
+    """
+    Save the current working image as a new version in history
+    
+    JSON body:
+    {
+        "session_id": str
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return {'error': 'No JSON data provided'}, 400
+        
+        session_id = data.get('session_id')
+        if not session_id:
+            return {'error': 'Missing required field: session_id'}, 400
+        
+        response = vs_service.save_change(session_id)
+        
+        if not response or not response.success:
+            return {'error': response.message if response else 'Failed to save change'}, 500
+        
+        return {
+            'message': response.message,
+            'version': response.version,
+            'image_url': response.image_url,
+            'saved_at': response.saved_at.isoformat()
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error saving change: {str(e)}'}, 500
+
+
+@virtual_staging_bp.route('/session/<session_id>/save-change', methods=['POST'])
+def save_session_change(session_id: str) -> Tuple[Dict[str, Any], int]:
+    """
+    Save the current working image as a new version in history and persist to AWS
+    
+    This is the RESTful endpoint that uses session_id from the URL path.
+    It will:
+    1. Persist the current working image to AWS S3
+    2. Create a new version with versioning
+    3. Update the session in Firestore
+    4. Return the new version information
+    
+    URL path:
+    /api/virtual-staging/session/<session_id>/save-change
+    """
+    try:
+        # Validate session exists
+        session = vs_service.get_session(session_id)
+        if not session:
+            return {'error': f'Session {session_id} not found'}, 404
+        
+        # Check if there's a current working image to save
+        if not session.current_image_path or not os.path.exists(session.current_image_path):
+            return {'error': 'No current working image to save for this session'}, 400
+        
+        # Save the change (persists to AWS and creates new version)
+        response = vs_service.save_change(session_id)
+        
+        if not response or not response.success:
+            return {'error': response.message if response else 'Failed to save change'}, 500
+
+        return {
+            'message': response.message,
+            'session_id': session_id,
+            'version': response.version,
+            'image_url': response.image_url,
+            'saved_at': response.saved_at.isoformat()
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error saving session change: {str(e)}'}, 500
+
+
+@virtual_staging_bp.route('/revert-change', methods=['POST'])
+def revert_change() -> Tuple[Dict[str, Any], int]:
+    """
+    Revert to a previous saved version
+    
+    JSON body:
+    {
+        "session_id": str,
+        "version_to_revert_to": int
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return {'error': 'No JSON data provided'}, 400
+        
+        session_id = data.get('session_id')
+        version_to_revert_to = data.get('version_to_revert_to')
+        
+        if not session_id or version_to_revert_to is None:
+            return {'error': 'Missing required fields: session_id, version_to_revert_to'}, 400
+        
+        response = vs_service.revert_change(session_id, version_to_revert_to)
+        
+        if not response or not response.success:
+            return {'error': response.message if response else 'Failed to revert change'}, 500
+        
+        return {
+            'message': response.message,
+            'version': response.version,
+            'image_url': response.image_url,
+            'reverted_at': response.reverted_at.isoformat()
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error reverting change: {str(e)}'}, 500
+
+
+@virtual_staging_bp.route('/version-history/<session_id>', methods=['GET'])
+def get_version_history(session_id: str) -> Tuple[Dict[str, Any], int]:
+    """Get complete version history for a session"""
+    try:
+        response = vs_service.get_version_history(session_id)
+        
+        if not response:
+            return {'error': 'Session not found'}, 404
+        
+        return {
+            'message': 'Version history retrieved successfully',
+            'session_id': response.session_id,
+            'total_versions': response.total_versions,
+            'current_version': response.current_version,
+            'has_unsaved_changes': response.has_unsaved_changes,
+            'versions': [v.model_dump() for v in response.versions]
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error retrieving version history: {str(e)}'}, 500
+
+@virtual_staging_bp.route('/chat-history/<session_id>', methods=['GET'])
+def get_chat_history(session_id: str) -> Tuple[Dict[str, Any], int]:
+    """
+    Get the persistent chat history for a staging session
+    
+    Query parameters:
+    - include_full_history (bool, optional): Include full conversation or just recent messages. Default: false
+    - last_n_messages (int, optional): Number of recent messages to include. Default: 10
+    """
+    try:
+        session = vs_service.get_session(session_id)
+        if not session:
+            return {'error': 'Session not found'}, 404
+        
+        if not session.chat_history_id:
+            return {'error': 'No chat history found for this session'}, 404
+        
+        # Get query parameters
+        include_full = request.args.get('include_full_history', type=bool, default=False)
+        last_n = request.args.get('last_n_messages', type=int, default=10)
+        
+        # Get chat history
+        chat_history = vs_service.chat_history_service.get_history(session.chat_history_id)
+        if not chat_history:
+            return {'error': 'Chat history not found'}, 404
+        
+        # Get conversation summary
+        summary = vs_service.chat_history_service.get_conversation_summary(session.chat_history_id)
+        
+        return {
+            'message': 'Chat history retrieved successfully',
+            'session_id': session_id,
+            'chat_history_id': session.chat_history_id,
+            'summary': summary,
+            'context': vs_service.chat_history_service.get_llm_context(
+                session.chat_history_id,
+                include_full_history=include_full,
+                last_n_messages=last_n
+            )
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error retrieving chat history: {str(e)}'}, 500
+
+
+@virtual_staging_bp.route('/chat-history/<session_id>/messages', methods=['GET'])
+def get_chat_messages(session_id: str) -> Tuple[Dict[str, Any], int]:
+    """
+    Get all messages from the chat history of a session
+    
+    Query parameters:
+    - role (str, optional): Filter by message role ('user', 'assistant'). Default: all
+    """
+    try:
+        session = vs_service.get_session(session_id)
+        if not session:
+            return {'error': 'Session not found'}, 404
+        
+        if not session.chat_history_id:
+            return {'error': 'No chat history found for this session'}, 404
+        
+        # Get chat history
+        chat_history = vs_service.chat_history_service.get_history(session.chat_history_id)
+        if not chat_history:
+            return {'error': 'Chat history not found'}, 404
+        
+        # Get optional role filter
+        role_filter = request.args.get('role', type=str, default=None)
+        
+        # Filter messages if role is specified
+        messages = chat_history.messages
+        if role_filter:
+            messages = [m for m in messages if m.role.value == role_filter]
+        
+        return {
+            'message': 'Chat messages retrieved successfully',
+            'session_id': session_id,
+            'total_messages': len(messages),
+            'messages': [
+                {
+                    'message_id': m.message_id,
+                    'role': m.role.value,
+                    'content': m.content,
+                    'refinement_iteration': m.refinement_iteration,
+                    'staging_parameters_used': m.staging_parameters_used,
+                    'created_at': m.created_at.isoformat(),
+                    'metadata': m.metadata
+                }
+                for m in messages
+            ]
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error retrieving chat messages: {str(e)}'}, 500
