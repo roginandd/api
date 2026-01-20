@@ -2,6 +2,7 @@ from config.aws_config import AWSConfig
 from botocore.exceptions import ClientError
 import uuid
 from datetime import datetime
+from io import BytesIO
 
 class AWSService:
     """Service for the AWS S3 bucket"""
@@ -35,6 +36,55 @@ class AWSService:
                 AWSConfig.AWS_S3_BUCKET,
                 s3_key,
                 ExtraArgs={"ContentType": file.content_type}
+            )
+            
+            # Generate the file URL
+            file_url = f"https://{AWSConfig.AWS_S3_BUCKET}.s3.{AWSConfig.AWS_REGION}.amazonaws.com/{s3_key}"
+            
+            return {
+                "success": True,
+                "url": file_url,
+                "key": s3_key,
+                "filename": new_filename
+            }
+        except ClientError as e:
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def upload_bytes(image_bytes: bytes, filename: str, folder: str = "", content_type: str = "image/png") -> dict:
+        """
+        Upload image bytes directly to S3 bucket.
+        
+        Args:
+            image_bytes: Image data as bytes
+            filename: Desired filename (extension should be included)
+            folder: Optional folder path within the bucket
+            content_type: MIME type of the file (default: image/png)
+            
+        Returns:
+            dict with success status, S3 key, and file URL or error message
+        """
+        try:
+            # Generate unique filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:8]
+            
+            # Extract extension from filename
+            extension = filename.rsplit('.', 1)[-1] if '.' in filename else 'png'
+            new_filename = f"{timestamp}_{unique_id}.{extension}"
+            
+            # Build the S3 key (path)
+            s3_key = f"{folder}/{new_filename}" if folder else new_filename
+            
+            # Convert bytes to BytesIO for upload
+            file_obj = BytesIO(image_bytes)
+            
+            # Upload to S3
+            AWSConfig.s3.upload_fileobj(
+                file_obj,
+                AWSConfig.AWS_S3_BUCKET,
+                s3_key,
+                ExtraArgs={"ContentType": content_type}
             )
             
             # Generate the file URL
