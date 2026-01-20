@@ -3,9 +3,6 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 
-
-
-
 class StagingParameters(BaseModel):
     """Parameters for customizing virtual staging"""
     role: str = Field(default="professional interior designer", description="Role description for the AI model")
