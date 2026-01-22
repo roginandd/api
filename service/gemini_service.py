@@ -130,15 +130,16 @@ class GeminiService:
             print(f"Error generating content: {str(e)}")
             return None
 
-    def generate_image_from_image(self, model: str, image_path: str, prompt: str, mask_image_path: Optional[str] = None) -> Optional[bytes]:
+    def generate_image_from_image(self, model: str, prompt: str, session=None, image_path: str = None, mask_image_path: Optional[str] = None) -> Optional[bytes]:
         """
         Generate virtually staged image using gemini-2.5-flash-image
         Native multimodal model that returns both text (reasoning) and image (inline_data)
         
         Args:
             model: Model name (overridden to gemini-2.5-flash-image)
-            image_path: Path to the input room image (local path or S3 URL)
             prompt: Staging parameters (style, furniture, colors, etc)
+            session: VirtualStaging session object to get the latest image from (preferred)
+            image_path: Path to the input room image (local path or S3 URL) - used as fallback if session not provided
             mask_image_path: Optional path to mask image for specifying a specific area/point
         
         Returns:
@@ -149,22 +150,58 @@ class GeminiService:
             Exception: If API call fails
         """
         try:
+            # Determine image path - get from session if provided, otherwise use image_path parameter
+            image_to_use = None
+            
+            if session:
+                # Get the latest image from session (prefer current_image_path/url, fallback to original)
+                if session.current_image_path:
+                    image_to_use = session.current_image_path
+                    print(f"[STAGING] Using current image from session: {session.current_image_path}")
+                elif session.current_image_url:
+                    image_to_use = session.current_image_url
+                    print(f"[STAGING] Using current image URL from session: {session.current_image_url[:50]}...")
+                elif session.original_image_path:
+                    image_to_use = session.original_image_path
+                    print(f"[STAGING] Using original image from session: {session.original_image_path}")
+                elif session.original_image_url:
+                    image_to_use = session.original_image_url
+                    print(f"[STAGING] Using original image URL from session: {session.original_image_url[:50]}...")
+                else:
+                    print(f"[STAGING] WARNING: Session has no image paths set")
+                    print(f"  Session current_image_path: {session.current_image_path}")
+                    print(f"  Session current_image_url: {session.current_image_url}")
+                    print(f"  Session original_image_path: {session.original_image_path}")
+                    print(f"  Session original_image_url: {session.original_image_url}")
+            else:
+                # Fallback to image_path parameter if no session provided
+                image_to_use = image_path
+                if image_to_use:
+                    print(f"[STAGING] Using image_path parameter: {image_to_use}")
+            
             # Validate image_path is provided
-            if not image_path:
-                raise FileNotFoundError("Image path is required and cannot be None or empty")
+            if not image_to_use:
+                error_msg = "Image path is required. Either provide a session object with images or image_path parameter"
+                print(f"[STAGING] ❌ {error_msg}")
+                raise FileNotFoundError(error_msg)
             
             # Load image - handle both local paths and S3 URLs
-            if isinstance(image_path, str) and (image_path.startswith('http://') or image_path.startswith('https://')):
-                # Download from URL (S3)
-                response = requests.get(image_path)
-                response.raise_for_status()
-                input_image = Image.open(BytesIO(response.content))
-                print(f"[STAGING] Downloaded image from URL: {image_path[:50]}...")
-            else:
-                # Local file path
-                if not os.path.exists(image_path):
-                    raise FileNotFoundError(f"Image file not found: {image_path}")
-                input_image = Image.open(image_path)
+            try:
+                if isinstance(image_to_use, str) and (image_to_use.startswith('http://') or image_to_use.startswith('https://')):
+                    # Download from URL (S3)
+                    response = requests.get(image_to_use)
+                    response.raise_for_status()
+                    input_image = Image.open(BytesIO(response.content))
+                    print(f"[STAGING] Downloaded image from URL: {image_to_use[:50]}...")
+                else:
+                    # Local file path
+                    if not os.path.exists(image_to_use):
+                        raise FileNotFoundError(f"Image file not found: {image_to_use}")
+                    input_image = Image.open(image_to_use)
+                    print(f"[STAGING] Loaded local image: {image_to_use}")
+            except Exception as e:
+                print(f"[STAGING] ❌ Error loading image: {str(e)}")
+                raise
             
             # Build comprehensive staging prompt
             staging_prompt = f"""You are an expert interior designer and virtual staging specialist.

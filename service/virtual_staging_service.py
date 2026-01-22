@@ -157,17 +157,24 @@ class VirtualStagingService:
             # Determine which image to use: override, current, or original
             image_path = image_path_override or session.current_image_path or session.original_image_path
             
-            if not image_path or not os.path.exists(image_path):
-                # Try to reconstruct path from session_id
-                reconstructed_path = str(Path('uploads') / f"original_{session_id}.png")
-                if os.path.exists(reconstructed_path):
-                    image_path = reconstructed_path
-                    print(f"[STAGING] Using reconstructed path: {reconstructed_path}")
-                else:
-                    print(f"Error: Original image not found for session {session_id}")
-                    print(f"  Expected path: {image_path}")
-                    print(f"  Reconstructed: {reconstructed_path}")
-                    return None
+            # Validate image path - it can be a local path, S3 URL, or we'll get it from session
+            # Only validate local paths here; S3 URLs will be validated in gemini_service
+            if image_path and not (image_path.startswith('http://') or image_path.startswith('https://')):
+                # Local path - check if it exists
+                if not os.path.exists(image_path):
+                    # Try to reconstruct path from session_id
+                    reconstructed_path = str(Path('uploads') / f"original_{session_id}.png")
+                    if os.path.exists(reconstructed_path):
+                        image_path = reconstructed_path
+                        print(f"[STAGING] Using reconstructed path: {reconstructed_path}")
+                    else:
+                        print(f"Error: Original image not found for session {session_id}")
+                        print(f"  Expected path: {image_path}")
+                        print(f"  Reconstructed: {reconstructed_path}")
+                        # Don't return None yet - gemini_service will validate and get from session if needed
+                        image_path = None
+            
+            # Note: image_path can be None here - gemini_service will get it from session
             
             # Use provided parameters or fall back to session parameters
             params = staging_parameters or session.current_parameters
@@ -204,11 +211,12 @@ class VirtualStagingService:
             print(f"{prompt}")
             print(f"[STAGING] ========== END PROMPT ==========\n")
             
-            # Generate image using Gemini with local file path
+            # Generate image using Gemini with session object (will get latest image)
             generated_image_bytes = self.gemini_service.generate_image_from_image(
                 model=self.gemini_model,
-                image_path=image_path,
                 prompt=prompt,
+                session=session,
+                image_path=image_path_override,
                 mask_image_path=mask_image_url
             )
             
@@ -269,9 +277,9 @@ class VirtualStagingService:
                 
                 print(f"[STAGING] Chat history updated for session {session_id}")
             
-            # Convert local image to base64 for response
+            # Convert local image to base64 for response (use local_path directly)
             import base64
-            with open(session.current_image_path, 'rb') as f:
+            with open(local_path, 'rb') as f:
                 image_data = base64.b64encode(f.read()).decode('utf-8')
             image_data_url = f"data:image/png;base64,{image_data}"
             
@@ -579,15 +587,20 @@ class VirtualStagingService:
             
             # Use current image (what's on screen) for refinement
             image_path = session.current_image_path or session.original_image_path
-            if not image_path or not os.path.exists(image_path):
-                # Try to reconstruct path from session_id
-                reconstructed_path = str(Path('uploads') / f"original_{session_id}.png")
-                if os.path.exists(reconstructed_path):
-                    image_path = reconstructed_path
-                    print(f"[REFINE] Using reconstructed path: {reconstructed_path}")
-                else:
-                    print(f"Error: Original image not found for session {session_id}")
-                    return None
+            
+            # Validate image path - only validate local paths
+            if image_path and not (image_path.startswith('http://') or image_path.startswith('https://')):
+                # Local path - check if it exists
+                if not os.path.exists(image_path):
+                    # Try to reconstruct path from session_id
+                    reconstructed_path = str(Path('uploads') / f"original_{session_id}.png")
+                    if os.path.exists(reconstructed_path):
+                        image_path = reconstructed_path
+                        print(f"[REFINE] Using reconstructed path: {reconstructed_path}")
+                    else:
+                        print(f"Error: Original image not found for session {session_id}")
+                        # Don't return None - gemini_service will validate and get from session if needed
+                        image_path = None
             
             # Get chat history context
             chat_history_llm_context = None
@@ -630,11 +643,11 @@ class VirtualStagingService:
             print(f"{full_refinement_prompt}")
             print(f"[REFINE] ========== END PROMPT ==========\n")
             
-            # Generate refined image with optional mask
+            # Generate refined image using Gemini with session object (will get latest image)
             refined_image_bytes = self.gemini_service.generate_image_from_image(
                 model=self.gemini_model,
-                image_path=image_path,
                 prompt=full_refinement_prompt,
+                session=session,
                 mask_image_path=mask_image_url
             )
             
@@ -699,9 +712,9 @@ class VirtualStagingService:
                 self.chat_history_service.repository.increment_iteration(session.chat_history_id)
                 print(f"[REFINE] Chat history updated for session {session_id}")
             
-            # Convert local image to base64 for response
+            # Convert local image to base64 for response (use local_path directly)
             import base64
-            with open(session.current_image_path, 'rb') as f:
+            with open(local_path, 'rb') as f:
                 image_data = base64.b64encode(f.read()).decode('utf-8')
             image_data_url = f"data:image/png;base64,{image_data}"
             

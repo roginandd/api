@@ -159,12 +159,12 @@ def create_session() -> Tuple[Dict[str, Any], int]:
 @virtual_staging_bp.route('/generate', methods=['POST'])
 def generate_staging() -> Tuple[Dict[str, Any], int]:
     """
-    Generate virtual staging with Gemini using uploaded image
+    Generate virtual staging with Gemini using latest session image or uploaded image
     
     Form data (multipart/form-data):
     {
-        "session_id": str,
-        "image": file (uploaded image - required),
+        "session_id": str (required),
+        "image": file (uploaded image - optional, will use latest session image if not provided),
         "custom_prompt": str (required - prompt for Gemini to edit the image),
         "image_mask": file (optional - second image to specify specific area/point),
         "style": str (optional),
@@ -175,14 +175,6 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
     }
     """
     try:
-        # Check if image file is present
-        if 'image' not in request.files:
-            return {'error': 'No image file provided'}, 400
-        
-        file = request.files['image']
-        if file.filename == '':
-            return {'error': 'No image file selected'}, 400
-        
         # Get session_id first
         session_id = request.form.get('session_id', type=str)
         if not session_id:
@@ -196,10 +188,14 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         # Get optional user message for chat history
         user_message = request.form.get('user_message', type=str)
         
-        # Validate and save main image with session_id
-        image_path = save_uploaded_file(file, session_id)
-        if not image_path:
-            return {'error': 'Invalid image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
+        # Handle image file if provided (optional)
+        image_path = None
+        if 'image' in request.files:
+            file = request.files['image']
+            if file and file.filename != '':
+                image_path = save_uploaded_file(file, session_id)
+                if not image_path:
+                    return {'error': 'Invalid image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
         
         # Get form data
         style = request.form.get('style', type=str)
@@ -254,31 +250,12 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         
         if not response:
             return {'error': 'Failed to generate staging'}, 500
-        
-        # Get the generated image path from response
-        generated_image_path = response.image_url
-        
-        if generated_image_path and os.path.exists(generated_image_path):
-            # Read generated image from disk and convert to base64
-            with open(generated_image_path, 'rb') as f:
-                image_bytes = f.read()
-            image_base64 = base64.standard_b64encode(image_bytes).decode('utf-8')
-            image_data_url = f"data:image/png;base64,{image_base64}"
-        else:
-            # Fallback to original image if generation failed
-            pil_image = Image.open(image_path)
-            from io import BytesIO
-            img_buffer = BytesIO()
-            pil_image.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
-            image_base64 = base64.standard_b64encode(img_buffer.getvalue()).decode('utf-8')
-            image_data_url = f"data:image/png;base64,{image_base64}"
+    
         
         return {
             'message': 'Virtual staging generated successfully',
             'session_id': session_id,
             'staging_type': 'AI-Generated (gemini-2.5-flash-image)',
-            'custom_prompt_used': custom_prompt,
             'prompt_used': response.prompt_used
         }, 200
     
