@@ -57,8 +57,8 @@ class VirtualStaging(BaseModel):
     """Virtual staging session model with version history and safety features"""
     
     session_id: str = Field(..., description="Unique identifier for the virtual staging session")
-    property_id: int = Field(..., description="Identifier for the associated property")
-    user_id: int = Field(..., description="Identifier for the user requesting the virtual staging")
+    property_id: str = Field(..., description="Identifier for the associated property")
+    user_id: str = Field(..., description="Identifier for the user requesting the virtual staging")
     room_name: str = Field(..., description="Name/identifier of the room being staged")
     
     # Chat history reference
