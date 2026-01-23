@@ -62,7 +62,7 @@ class VirtualStagingChatHistoryRepository(BaseRepository[VirtualStagingChatHisto
             return results[0][1]
         return None
     
-    def get_histories_by_property(self, property_id: int) -> List[tuple[str, VirtualStagingChatHistory]]:
+    def get_histories_by_property(self, property_id: str) -> List[tuple[str, VirtualStagingChatHistory]]:
         """
         Get all chat histories for a property
         

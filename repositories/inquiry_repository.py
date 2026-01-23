@@ -53,7 +53,7 @@ class InquiryRepository(BaseRepository[Inquiry]):
         Returns:
             List of tuples (inquiry_id, Inquiry)
         """
-        query = self.collection.where('propertyId', '==', property_id)
+        query = self.collection.where(field_path='propertyId', op_string='==', value=property_id)
         docs = query.stream()
         return [(doc.id, self.to_model(doc.to_dict())) for doc in docs]
 
@@ -139,7 +139,7 @@ class PropertyViewRepository(BaseRepository[PropertyView]):
         Returns:
             View count
         """
-        query = self.collection.where('propertyId', '==', property_id)
+        query = self.collection.where(field_path='propertyId', op_string='==', value=property_id)
         docs = query.stream()
         return len(list(docs))
 
@@ -153,6 +153,6 @@ class PropertyViewRepository(BaseRepository[PropertyView]):
         Returns:
             List of tuples (view_id, PropertyView)
         """
-        query = self.collection.where('propertyId', '==', property_id)
+        query = self.collection.where(field_path='propertyId', op_string='==', value=property_id)
         docs = query.stream()
         return [(doc.id, self.to_model(doc.to_dict())) for doc in docs]

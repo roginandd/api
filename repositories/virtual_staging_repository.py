@@ -40,7 +40,7 @@ class VirtualStagingRepository(BaseRepository[VirtualStaging]):
         """
         return self.get(session_id)
     
-    def get_sessions_by_property(self, property_id: int) -> List[tuple[str, VirtualStaging]]:
+    def get_sessions_by_property(self, property_id: str) -> List[tuple[str, VirtualStaging]]:
         """
         Get all virtual staging sessions for a property
         

@@ -112,7 +112,7 @@ class BaseRepository(ABC, Generic[T]):
         Returns:
             List of tuples (doc_id, model)
         """
-        query = self.collection.where(field, operator, value)
+        query = self.collection.where(field_path=field, op_string=operator, value=value)
         docs = query.stream()
         return [(doc.id, self.to_model(doc.to_dict())) for doc in docs]
     
