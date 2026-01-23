@@ -3,6 +3,8 @@ from botocore.exceptions import ClientError
 import uuid
 from datetime import datetime
 from io import BytesIO
+from PIL import Image
+import os
 
 class AWSService:
     """Service for the AWS S3 bucket"""
@@ -208,4 +210,92 @@ class AWSService:
             return True
         except ClientError:
             return False
+
+    @staticmethod
+    def upload_property_image(file, property_id: str, image_type: str) -> dict:
+        """
+        Upload a property image to S3 with thumbnail generation.
+        
+        Args:
+            file: File object to upload
+            property_id: Property ID
+            image_type: "regular" or "panoramic"
+            
+        Returns:
+            dict with image data
+        """
+        try:
+            # Generate unique image ID
+            image_id = f"img_{int(datetime.utcnow().timestamp() * 1000)}_{str(uuid.uuid4())[:9]}"
+            
+            # Get file extension
+            original_filename = file.filename
+            extension = original_filename.rsplit('.', 1)[-1].lower() if '.' in original_filename else 'jpg'
+            
+            # Build S3 key for original image
+            filename = f"{image_id}.{extension}"
+            s3_key = f"properties/{property_id}/{image_type}/{filename}"
+            
+            # Read file content into memory
+            file_content = file.read()
+            file_like = BytesIO(file_content)
+            
+            # Generate file URL
+            file_url = f"https://{AWSConfig.AWS_S3_BUCKET}.s3.{AWSConfig.AWS_REGION}.amazonaws.com/{s3_key}"
+            
+            thumbnail_url = None
+            
+            # Create thumbnail for regular images
+            if image_type == "regular":
+                # Create thumbnail from the content
+                thumb_buffer = BytesIO(file_content)
+                image = Image.open(thumb_buffer)
+                
+                # Create thumbnail (300x200, maintain aspect ratio)
+                image.thumbnail((300, 200), Image.Resampling.LANCZOS)
+                
+                # Convert to RGB if necessary
+                if image.mode in ("RGBA", "P"):
+                    image = image.convert("RGB")
+                
+                # Save thumbnail to BytesIO
+                thumb_output = BytesIO()
+                image.save(thumb_output, format='JPEG', quality=80)
+                thumb_output.seek(0)
+                
+                # Upload thumbnail
+                thumb_filename = f"{image_id}_thumb.jpg"
+                thumb_s3_key = f"properties/{property_id}/thumbnails/{thumb_filename}"
+                
+                AWSConfig.s3.upload_fileobj(
+                    thumb_output,
+                    AWSConfig.AWS_S3_BUCKET,
+                    thumb_s3_key,
+                    ExtraArgs={
+                        "ContentType": "image/jpeg"
+                    }
+                )
+                
+                thumbnail_url = f"https://{AWSConfig.AWS_S3_BUCKET}.s3.{AWSConfig.AWS_REGION}.amazonaws.com/{thumb_s3_key}"
+            
+            # Upload original image
+            AWSConfig.s3.upload_fileobj(
+                file_like,
+                AWSConfig.AWS_S3_BUCKET,
+                s3_key,
+                ExtraArgs={
+                    "ContentType": file.content_type
+                }
+            )
+            
+            return {
+                "id": image_id,
+                "url": file_url,
+                "thumbnailUrl": thumbnail_url,
+                "filename": filename,
+                "imageType": image_type
+            }
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
     
