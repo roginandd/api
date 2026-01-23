@@ -201,7 +201,21 @@ def get_properties():
 def update_property(property_id: str):
     """Update an existing property"""
     try:
-        data = request.get_json()
+        # Get form data (for file uploads) or JSON data
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            data = request.form.to_dict()
+            # Get uploaded files
+            files = {}
+            if 'regularImages' in request.files:
+                files['regularImages'] = request.files.getlist('regularImages')
+            if 'panoramicImages' in request.files:
+                files['panoramicImages'] = request.files.getlist('panoramicImages')
+            if 'image' in request.files:
+                files['image'] = request.files.getlist('image')
+        else:
+            data = request.get_json()
+            files = None
+
         if not data:
             return jsonify({
                 'success': False,
@@ -214,7 +228,7 @@ def update_property(property_id: str):
         # TODO: Get user_id from authentication
         user_id = data.get('user_id', 'user_123456')
 
-        updated_property = property_service.update_property(property_id, data, user_id)
+        updated_property = property_service.update_property(property_id, data, user_id, files)
 
         return jsonify({
             'success': True,
@@ -241,6 +255,68 @@ def update_property(property_id: str):
             'error': {
                 'code': 'INTERNAL_ERROR',
                 'message': 'Failed to update property'
+            }
+        }), 500
+
+
+@property_bp.route('/<property_id>', methods=['PATCH'])
+def patch_property(property_id: str):
+    """Partially update an existing property"""
+    try:
+        # Get form data (for file uploads) or JSON data
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            data = request.form.to_dict()
+            # Get uploaded files
+            files = {}
+            if 'regularImages' in request.files:
+                files['regularImages'] = request.files.getlist('regularImages')
+            if 'panoramicImages' in request.files:
+                files['panoramicImages'] = request.files.getlist('panoramicImages')
+            if 'image' in request.files:
+                files['image'] = request.files.getlist('image')
+        else:
+            data = request.get_json()
+            files = None
+
+        if not data and not files:
+            return jsonify({
+                'success': False,
+                'error': {
+                    'code': 'VALIDATION_ERROR',
+                    'message': 'No data or files provided'
+                }
+            }), 400
+
+        # TODO: Get user_id from authentication
+        user_id = data.get('user_id', 'user_123456') if data else 'user_123456'
+
+        updated_property = property_service.update_property(property_id, data or {}, user_id, files)
+
+        return jsonify({
+            'success': True,
+            'property': updated_property.model_dump()
+        }), 200
+
+    except ValidationError as e:
+        logger.warning(f"Validation error patching property {property_id}: {e.message}")
+        return jsonify({
+            'success': False,
+            'error': {
+                'code': 'VALIDATION_ERROR',
+                'message': e.message,
+                'details': {
+                    'field': e.field,
+                    'message': e.message
+                }
+            }
+        }), 400
+    except Exception as e:
+        logger.error(f"Error patching property {property_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': {
+                'code': 'INTERNAL_ERROR',
+                'message': 'Failed to patch property'
             }
         }), 500
 

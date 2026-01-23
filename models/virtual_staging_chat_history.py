@@ -47,8 +47,8 @@ class VirtualStagingChatHistory(BaseModel):
     
     history_id: str = Field(..., description="Unique identifier for the chat history record")
     session_id: str = Field(..., description="Reference to the virtual staging session")
-    property_id: int = Field(..., description="Reference to the property")
-    user_id: int = Field(..., description="Reference to the user")
+    property_id: str = Field(..., description="Reference to the property")
+    user_id: str = Field(..., description="Reference to the user")
     
     # Chat messages
     messages: List[VirtualStagingChatMessage] = Field(default_factory=list, description="Ordered list of chat messages")

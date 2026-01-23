@@ -21,8 +21,8 @@ class Property(BaseModel):
     propertyId: Optional[str] = Field(None, description="Unique property ID")
     # Basic Information
     name: str = Field(..., description="Property title/name")
-    propertyType: str = Field(..., description="House, Condo, Apartment, Lot, Commercial")
-    listingType: str = Field(..., description="For Sale, For Rent, For Lease")
+    propertyType: Optional[str] = Field(None, description="House, Condo, Apartment, Lot, Commercial")
+    listingType: Optional[str] = Field(None, description="For Sale, For Rent, For Lease")
     address: str = Field(..., description="Full street address")
 
     # Location
@@ -110,6 +110,8 @@ class Property(BaseModel):
 
     @validator('propertyType')
     def validate_property_type(cls, v):
+        if v is None:
+            return v
         valid_types = ["House", "Condo", "Apartment", "Lot", "Commercial"]
         if v not in valid_types:
             raise ValueError(f'propertyType must be one of {valid_types}')
@@ -117,6 +119,8 @@ class Property(BaseModel):
 
     @validator('listingType')
     def validate_listing_type(cls, v):
+        if v is None:
+            return v
         valid_types = ["For Sale", "For Rent", "For Lease"]
         if v not in valid_types:
             raise ValueError(f'listingType must be one of {valid_types}')

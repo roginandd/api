@@ -87,49 +87,56 @@ def generate_session_id() -> str:
 @virtual_staging_bp.route('/session', methods=['POST'])
 def create_session() -> Tuple[Dict[str, Any], int]:
     """
-    Create a new virtual staging session with image upload
+    Create a new virtual staging session using a panoramic image from the property
     
     Form data (multipart/form-data):
     {
-        "property_id": int,
-        "user_id": int,
-        "room_name": str,
-        "image": file (uploaded image),
-        "style": str (StyleEnum),
-        "furniture_theme": str (FurnitureThemeEnum),
+        "property_id": str (required),
+        "user_id": str (required),
+        "room_name": str (required),
+        "image_index": int (optional - index of panoramic image to use, defaults to 0),
+        "style": str (StyleEnum, required),
+        "furniture_theme": str (FurnitureThemeEnum, required),
         "color_scheme": str (hex color, optional),
         "specific_request": str (optional)
     }
     """
     try:
-        # Check if image file is present
-        if 'image' not in request.files:
-            return {'error': 'No image file provided'}, 400
-        
-        file = request.files['image']
-        if file.filename == '':
-            return {'error': 'No image file selected'}, 400
-        
-        # Get form data first to validate required fields
-        property_id = request.form.get('property_id', type=int)
-        user_id = request.form.get('user_id', type=int)
+        # Get form data
+        property_id = request.form.get('property_id', type=str)
+        user_id = request.form.get('user_id', type=str)
         room_name = request.form.get('room_name', type=str)
+        image_index = request.form.get('image_index', type=int, default=0)
         style = request.form.get('style', type=str)
         furniture_theme = request.form.get('furniture_theme', type=str)
         color_scheme = request.form.get('color_scheme', type=str)
         specific_request = request.form.get('specific_request', type=str)
         
-        # Validate required fields before saving file
+        # Validate required fields
         if not all([property_id, user_id, room_name, style, furniture_theme]):
             return {'error': 'Missing required fields: property_id, user_id, room_name, style, furniture_theme'}, 400
         
-        # Generate session_id FIRST
-        session_id = generate_session_id()
+        # Get property to access panoramic images
+        from service.property_service import PropertyService
+        property_service = PropertyService()
+        property_obj = property_service.get_property(property_id)
+        if not property_obj:
+            return {'error': 'Property not found'}, 404
         
-        # Upload image to S3
-        image_url = upload_file_to_s3(file, session_id=session_id)
-        if not image_url:
-            return {'error': 'Failed to upload image to S3 or invalid format. Allowed: png, jpg, jpeg, gif, webp'}, 400
+        # Get panoramic images
+        panoramic_images = [img for img in property_obj.images if img.imageType == "panoramic"]
+        if not panoramic_images:
+            return {'error': 'No panoramic images found for this property'}, 400
+        
+        # Validate image_index
+        if image_index < 0 or image_index >= len(panoramic_images):
+            return {'error': f'Invalid image_index. Available panoramic images: 0-{len(panoramic_images)-1}'}, 400
+        
+        # Get selected panoramic image
+        selected_image = panoramic_images[image_index]
+        
+        # Generate session_id
+        session_id = generate_session_id()
         
         # Validate enums
         try:
@@ -147,13 +154,13 @@ def create_session() -> Tuple[Dict[str, Any], int]:
             specific_request=specific_request
         )
         
-        # Create session with S3 image URL
+        # Create session with selected panoramic image URL
         staging = vs_service.create_staging_session_from_s3(
             session_id=session_id,
             property_id=property_id,
             user_id=user_id,
             room_name=room_name,
-            original_image_url=image_url,
+            original_image_url=selected_image.url,
             staging_parameters=staging_params
         )
         
@@ -163,7 +170,12 @@ def create_session() -> Tuple[Dict[str, Any], int]:
         return {
             'message': 'Session created successfully',
             'session_id': session_id,
-            'image_path': image_path,
+            'selected_image': {
+                'url': selected_image.url,
+                'filename': selected_image.filename,
+                'index': image_index
+            },
+            'available_panoramic_images': len(panoramic_images),
             'staging': staging.to_dict()
         }, 201
     
@@ -174,12 +186,12 @@ def create_session() -> Tuple[Dict[str, Any], int]:
 @virtual_staging_bp.route('/generate', methods=['POST'])
 def generate_staging() -> Tuple[Dict[str, Any], int]:
     """
-    Generate virtual staging with Gemini using latest session image or uploaded image
+    Generate virtual staging with Gemini using a panoramic image from the property
     
     Form data (multipart/form-data):
     {
         "session_id": str (required),
-        "image": file (uploaded image - optional, will use latest session image if not provided),
+        "image_index": int (optional - index of panoramic image to use, defaults to session's original),
         "custom_prompt": str (required - prompt for Gemini to edit the image),
         "image_mask": file (optional - second image to specify specific area/point),
         "style": str (optional),
@@ -203,14 +215,40 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         # Get optional user message for chat history
         user_message = request.form.get('user_message', type=str)
         
-        # Handle image file if provided (optional)
-        image_path = None
-        if 'image' in request.files:
-            file = request.files['image']
-            if file and file.filename != '':
-                image_path = save_uploaded_file(file, session_id)
-                if not image_path:
-                    return {'error': 'Invalid image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
+        # Get image_index for selecting panoramic image
+        image_index = request.form.get('image_index', type=int)
+        
+        # Get the session to access property
+        session = vs_service.get_session(session_id)
+        if not session:
+            return {'error': 'Session not found'}, 404
+        
+        # Get property to access panoramic images
+        from service.property_service import PropertyService
+        property_service = PropertyService()
+        property_obj = property_service.get_property(session.property_id)
+        if not property_obj:
+            return {'error': 'Property not found'}, 404
+        
+        # Get panoramic images
+        panoramic_images = [img for img in property_obj.images if img.imageType == "panoramic"]
+        if not panoramic_images:
+            return {'error': 'No panoramic images found for this property'}, 400
+        
+        # Determine which image to use
+        if image_index is not None:
+            # Validate image_index
+            if image_index < 0 or image_index >= len(panoramic_images):
+                return {'error': f'Invalid image_index. Available panoramic images: 0-{len(panoramic_images)-1}'}, 400
+            selected_image = panoramic_images[image_index]
+        else:
+            # Use the session's original image if it's panoramic
+            session_image_url = session.original_image_url
+            matching_images = [img for img in panoramic_images if img.url == session_image_url]
+            if not matching_images:
+                return {'error': 'Session original image is not panoramic. Please specify image_index.'}, 400
+            selected_image = matching_images[0]
+            image_index = panoramic_images.index(selected_image)
         
         # Get form data
         style = request.form.get('style', type=str)
@@ -254,13 +292,14 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
                 specific_request=specific_request
             )
         
-        # Generate staging with custom prompt and optional user message
+        # Generate staging with selected panoramic image
         response = vs_service.generate_staging(
             session_id=session_id,
             staging_parameters=staging_params,
             custom_prompt=custom_prompt,
             mask_image_url=mask_image_path,
-            user_message=user_message
+            user_message=user_message,
+            image_path_override=selected_image.url
         )
         
         if not response:
@@ -270,6 +309,13 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         return {
             'message': 'Virtual staging generated successfully',
             'session_id': session_id,
+            'new_panorama_url': response.image_url,
+            'selected_image': {
+                'url': selected_image.url,
+                'filename': selected_image.filename,
+                'index': image_index
+            },
+            'available_panoramic_images': len(panoramic_images),
             'staging_type': 'AI-Generated (gemini-2.5-flash-image)',
             'prompt_used': response.prompt_used
         }, 200
@@ -378,7 +424,7 @@ def refine_staging() -> Tuple[Dict[str, Any], int]:
 
 
 @virtual_staging_bp.route('/property/<int:property_id>', methods=['GET'])
-def get_property_sessions(property_id: int) -> Tuple[Dict[str, Any], int]:
+def get_property_sessions(property_id: str) -> Tuple[Dict[str, Any], int]:
     """Get all sessions for a property"""
     try:
         sessions = vs_service.get_sessions_by_property(property_id)

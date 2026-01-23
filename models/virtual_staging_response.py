@@ -9,8 +9,8 @@ from datetime import datetime
 class StagingMetadata(BaseModel):
     """Metadata about a staging result"""
     session_id: str = Field(..., description="Unique staging session identifier")
-    property_id: int = Field(..., description="Associated property ID")
-    user_id: int = Field(..., description="Associated user ID")
+    property_id: str = Field(..., description="Associated property ID")
+    user_id: str = Field(..., description="Associated user ID")
     room_name: str = Field(..., description="Room name/identifier")
     version: int = Field(..., description="Staging version/iteration number")
     
@@ -74,13 +74,15 @@ class VersionHistoryResponse(BaseModel):
 class StagingSessionResponse(BaseModel):
     """Response for getting a staging session"""
     session_id: str = Field(..., description="Unique staging session identifier")
-    property_id: int = Field(..., description="Associated property ID")
-    user_id: int = Field(..., description="Associated user ID")
+    property_id: str = Field(..., description="Associated property ID")
+    user_id: str = Field(..., description="Associated user ID")
     room_name: str = Field(..., description="Room name/identifier")
     
     original_image_url: Optional[str] = Field(None, description="URL to the original image in S3")
     current_image_url: Optional[str] = Field(None, description="URL to the current working image (unsaved)")
     last_saved_image_url: Optional[str] = Field(None, description="URL to the last saved image version")
+    
+    panoramic_images: List[Dict[str, Any]] = Field(default_factory=list, description="List of panoramic images from the property")
     
     staging_parameters: Dict[str, Any] = Field(..., description="Current working staging parameters")
     current_version: int = Field(..., description="Current version number (last saved)")

@@ -15,7 +15,6 @@ from controllers.mark_controller import mark_bp
 
 # Create Flask app
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
 
 # Enable CORS with specific origins for development
 CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"], supports_credentials=True)
