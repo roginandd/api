@@ -33,22 +33,22 @@ class VirtualStagingService:
         self.gemini_model = gemini_model
         self.base_url = "https://vista-resources.s3.ap-southeast-2.amazonaws.com/"
     
-    def create_staging_session(self,
+    def create_staging_session_from_s3(self,
                               session_id: str,
                               property_id: int,
                               user_id: int,
                               room_name: str,
-                              original_image_path: str,
+                              original_image_url: str,
                               staging_parameters: StagingParameters) -> Optional[VirtualStaging]:
         """
-        Create a new virtual staging session with local image file
+        Create a new virtual staging session with S3 image URL
         
         Args:
             session_id: Unique session identifier
             property_id: Property ID
             user_id: User ID
             room_name: Room name being staged
-            original_image_path: Local file path to the original image
+            original_image_url: S3 URL to the original image
             staging_parameters: Staging parameters for customization
             
         Returns:
@@ -58,29 +58,17 @@ class VirtualStagingService:
             return None
         
         try:
-            # Validate file exists
-            if not os.path.exists(original_image_path):
-                print(f"Error: Original image file not found: {original_image_path}")
+            # Validate S3 URL
+            if not original_image_url or not (original_image_url.startswith('http://') or original_image_url.startswith('https://')):
+                print(f"Error: Invalid S3 URL: {original_image_url}")
                 return None
             
-            print(f"[SESSION] Using original image from: {original_image_path}")
+            print(f"[SESSION] Using original image from S3: {original_image_url[:50]}...")
             
-            # Upload original image to AWS S3
-            with open(original_image_path, 'rb') as f:
-                image_bytes = f.read()
+            # Extract S3 key from URL
+            s3_key = self.aws_service.get_s3_key_from_url(original_image_url)
             
-            upload_result = self.aws_service.upload_bytes(
-                image_bytes=image_bytes,
-                filename=f"original_{session_id}.png",
-                folder=f"staging/{session_id}/original",
-                content_type="image/png"
-            )
-            
-            if not upload_result.get("success"):
-                print(f"Failed to upload original image to AWS: {upload_result.get('error')}")
-                return None
-            
-            print(f"[SESSION] Uploaded original image to AWS: {upload_result.get('url')}")
+            print(f"[SESSION] Uploaded original image to S3: {original_image_url}")
             
             # Create chat history for this session
             chat_history_id = f"chat_{session_id}"
@@ -104,8 +92,8 @@ class VirtualStagingService:
                 user_id=user_id,
                 room_name=room_name,
                 chat_history_id=chat_history_id,
-                orignal_image_key=upload_result.get("key"),  # S3 key
-                original_image_url=upload_result.get("url"),  # S3 URL
+                orignal_image_key=s3_key,  # S3 key
+                original_image_url=original_image_url,  # S3 URL
                 current_parameters=staging_parameters,
                 version=0,
                 last_saved_version=0
@@ -116,7 +104,7 @@ class VirtualStagingService:
             created_session = self.repository.create_session(staging)
             
             if created_session:
-                print(f"[SESSION] Session {session_id} created with chat history and S3 upload")
+                print(f"[SESSION] Session {session_id} created with chat history")
                 print(f"[SESSION] S3 key: {created_session.orignal_image_key}")
             
             return created_session
@@ -124,6 +112,21 @@ class VirtualStagingService:
         except Exception as e:
             print(f"Error creating staging session: {str(e)}")
             return None
+    
+    def create_staging_session(self,
+                              session_id: str,
+                              property_id: int,
+                              user_id: int,
+                              room_name: str,
+                              original_image_path: str,
+                              staging_parameters: StagingParameters) -> Optional[VirtualStaging]:
+        """
+        DEPRECATED: Use create_staging_session_from_s3 instead.
+        Create a new virtual staging session with local image file (for backward compatibility)
+        """
+        print("[SESSION] WARNING: create_staging_session with local file is deprecated. Use create_staging_session_from_s3")
+        # For now, return None to force use of new S3 method
+        return None
     
     def generate_staging(self,
                         session_id: str,

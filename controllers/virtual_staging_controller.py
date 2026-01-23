@@ -14,11 +14,9 @@ from pathlib import Path
 from PIL import Image
 
 # Configuration
-UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
-# Create upload folder if it doesn't exist
-Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
+# Note: All uploads are now handled via AWS S3 for deployment compatibility
 
 
 def allowed_file(filename: str) -> bool:
@@ -26,16 +24,33 @@ def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def save_uploaded_file(file, session_id: str = None) -> str:
-    """Save uploaded file and return file path"""
-    if file and allowed_file(file.filename):
-        # Use session_id for consistent filename if provided, otherwise use timestamp
-        filename = f"original_{session_id}.png"
-
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
-        return filepath
-    return None
+def upload_file_to_s3(file, session_id: str) -> str:
+    """Upload file to S3 and return S3 URL"""
+    if not file or not allowed_file(file.filename):
+        return None
+    
+    try:
+        from service.aws_service import AWSService
+        
+        # Read file content
+        file_content = file.read()
+        
+        # Upload to S3
+        result = AWSService.upload_bytes(
+            image_bytes=file_content,
+            filename=f"original_{session_id}.png",
+            folder="staging",
+            content_type="image/png"
+        )
+        
+        if result.get("success"):
+            return result.get("url")
+        else:
+            print(f"S3 upload failed: {result.get('error')}")
+            return None
+    except Exception as e:
+        print(f"Error uploading to S3: {str(e)}")
+        return None
 
 
 def encode_image_to_base64(image_path: str) -> str:
@@ -111,10 +126,10 @@ def create_session() -> Tuple[Dict[str, Any], int]:
         # Generate session_id FIRST
         session_id = generate_session_id()
         
-        # Validate and save image with session_id in filename
-        image_path = save_uploaded_file(file, session_id=session_id)
-        if not image_path:
-            return {'error': 'Invalid image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
+        # Upload image to S3
+        image_url = upload_file_to_s3(file, session_id=session_id)
+        if not image_url:
+            return {'error': 'Failed to upload image to S3 or invalid format. Allowed: png, jpg, jpeg, gif, webp'}, 400
         
         # Validate enums
         try:
@@ -132,13 +147,13 @@ def create_session() -> Tuple[Dict[str, Any], int]:
             specific_request=specific_request
         )
         
-        # Create session with the saved file path
-        staging = vs_service.create_staging_session(
+        # Create session with S3 image URL
+        staging = vs_service.create_staging_session_from_s3(
             session_id=session_id,
             property_id=property_id,
             user_id=user_id,
             room_name=room_name,
-            original_image_path=image_path,
+            original_image_url=image_url,
             staging_parameters=staging_params
         )
         
