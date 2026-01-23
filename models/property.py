@@ -159,3 +159,94 @@ class Property(BaseModel):
         if isinstance(data.get('updatedAt'), str):
             data['updatedAt'] = datetime.fromisoformat(data['updatedAt'])
         return cls(**data)
+
+
+class PropertyImagePayload(BaseModel):
+    """Simplified image structure for buyer payloads"""
+    id: str
+    url: str
+    imageType: str  # "regular" | "panoramic"
+
+
+class PropertyCardPayload(BaseModel):
+    """Lightweight payload for marketplace property cards"""
+    # Navigation & Identity
+    propertyId: str
+
+    # Basic Info
+    name: str
+    address: str  # For city extraction
+
+    # Pricing
+    price: float
+    priceNegotiable: Optional[bool] = None
+    listingType: str  # "For Sale" | "For Rent" | "For Lease"
+
+    # Key Specs
+    bedrooms: Optional[int] = None
+    bathrooms: Optional[float] = None
+    floorArea: Optional[float] = None
+
+    # Type Info
+    propertyType: str
+    furnishing: Optional[str] = None
+
+    # Image (single optimized image for cards)
+    imageUrl: str  # Primary display image URL
+
+
+class PropertyDetailsPayload(BaseModel):
+    """Full payload for property details view"""
+    # Navigation & Identity
+    propertyId: str
+
+    # Header Info
+    name: str
+    listingType: str
+    propertyType: str
+    status: Optional[str] = None
+    address: str
+
+    # Pricing
+    price: float
+    priceNegotiable: Optional[bool] = None
+    associationDues: Optional[float] = None
+
+    # Key Stats
+    bedrooms: Optional[int] = None
+    bathrooms: Optional[float] = None
+    floorArea: Optional[float] = None
+    parkingSlots: Optional[int] = None
+
+    # Description
+    description: Optional[str] = None
+
+    # Details Section
+    furnishing: Optional[str] = None
+    condition: Optional[str] = None
+    lotArea: Optional[float] = None
+    yearBuilt: Optional[int] = None
+    storeys: Optional[int] = None
+
+    # Features & Amenities
+    interiorFeatures: List[str] = Field(default_factory=list)
+    amenities: List[str] = Field(default_factory=list)
+    buildingAmenities: List[str] = Field(default_factory=list)
+
+    # Images (full gallery)
+    images: List[PropertyImagePayload] = Field(default_factory=list)
+
+    # Agent Info (optional)
+    agentName: Optional[str] = None
+    agentPhone: Optional[str] = None
+    agentEmail: Optional[str] = None
+    agentExperience: Optional[int] = None
+
+
+class FilterPayload(BaseModel):
+    """Payload for property search/filtering"""
+    location: Optional[str] = None
+    propertyType: Optional[str] = None
+    minPrice: Optional[float] = None
+    maxPrice: Optional[float] = None
+    bedrooms: Optional[int] = None
