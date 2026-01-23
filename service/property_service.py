@@ -41,7 +41,7 @@ class PropertyService:
         property_data = self._parse_property_data(data, user_id)
 
         # Generate property ID
-        property_id = f"prop_{int(datetime.utcnow().timestamp() * 1000)}_{str(uuid.uuid4())[:9]}"
+        property_id = f"prop{uuid.uuid4().hex}"
 
         # Handle image uploads
         images = []
@@ -82,7 +82,7 @@ class PropertyService:
         """Get all properties"""
         return self.repository.get_all_properties()
 
-    def update_property(self, property_id: str, data: Dict[str, Any], user_id: str) -> Property:
+    def update_property(self, property_id: str, data: Dict[str, Any], user_id: str, files: Dict[str, Any] = None) -> Property:
         """
         Update an existing property
 
@@ -90,6 +90,7 @@ class PropertyService:
             property_id: Property ID
             data: Updated data
             user_id: User making the update
+            files: Optional uploaded files (regularImages, panoramicImages, image)
 
         Returns:
             Updated Property
@@ -104,6 +105,26 @@ class PropertyService:
         # Parse and validate data
         update_data = self._parse_property_data(data, user_id, is_update=True)
         update_data['updatedAt'] = datetime.utcnow()
+
+        # Handle image uploads if files provided
+        if files:
+            images = self._handle_image_uploads(files, property_id)
+            # Handle main image update if provided
+            if 'image' in files and files['image']:
+                main_image_result = self.aws_service.upload_property_image(files['image'][0], property_id, 'regular')
+                if main_image_result.get('success', True):
+                    update_data['image'] = PropertyImage(**main_image_result)
+                else:
+                    raise ValidationError(f"Failed to upload main image: {main_image_result.get('error', 'Unknown error')}")
+
+            # Add new images to existing images
+            if images:
+                if not hasattr(property_model, 'images') or property_model.images is None:
+                    property_model.images = []
+                property_model.images.extend(images)
+                # Update image counts
+                update_data['regularImageCount'] = len([img for img in property_model.images if img.imageType == "regular"])
+                update_data['panoramicImageCount'] = len([img for img in property_model.images if img.imageType == "panoramic"])
 
         # Update model
         for key, value in update_data.items():
@@ -198,109 +219,127 @@ class PropertyService:
         property_data = {}
 
         # Basic fields
-        property_data['name'] = data.get('name', '').strip()
-        property_data['propertyType'] = data.get('propertyType')
-        property_data['listingType'] = data.get('listingType')
-        property_data['address'] = data.get('address', '').strip()
+        if 'name' in data:
+            property_data['name'] = data['name'].strip()
+        if 'propertyType' in data:
+            property_data['propertyType'] = data['propertyType']
+        if 'listingType' in data:
+            property_data['listingType'] = data['listingType']
+        if 'address' in data:
+            property_data['address'] = data['address'].strip()
 
         # Location
-        if data.get('latitude'):
+        if 'latitude' in data and data['latitude']:
             property_data['latitude'] = float(data['latitude'])
-        if data.get('longitude'):
+        if 'longitude' in data and data['longitude']:
             property_data['longitude'] = float(data['longitude'])
 
         # Pricing
-        property_data['price'] = float(data['price'])
-        property_data['priceNegotiable'] = data.get('priceNegotiable') == 'true'
+        if 'price' in data:
+            property_data['price'] = float(data['price'])
+        if 'priceNegotiable' in data:
+            property_data['priceNegotiable'] = data['priceNegotiable'] == 'true'
 
         # Specifications
-        if data.get('bedrooms'):
+        if 'bedrooms' in data and data['bedrooms']:
             property_data['bedrooms'] = int(data['bedrooms'])
-        if data.get('bathrooms'):
+        if 'bathrooms' in data and data['bathrooms']:
             property_data['bathrooms'] = float(data['bathrooms'])
-        if data.get('floorArea'):
+        if 'floorArea' in data and data['floorArea']:
             property_data['floorArea'] = float(data['floorArea'])
-        if data.get('lotArea'):
+        if 'lotArea' in data and data['lotArea']:
             property_data['lotArea'] = float(data['lotArea'])
 
         # Parking
-        property_data['parkingAvailable'] = data.get('parkingAvailable') == 'true'
-        if data.get('parkingSlots'):
+        if 'parkingAvailable' in data:
+            property_data['parkingAvailable'] = data['parkingAvailable'] == 'true'
+        if 'parkingSlots' in data and data['parkingSlots']:
             property_data['parkingSlots'] = int(data['parkingSlots'])
 
         # Building details
-        if data.get('floorLevel'):
+        if 'floorLevel' in data and data['floorLevel']:
             property_data['floorLevel'] = data['floorLevel'].strip()
-        if data.get('storeys'):
+        if 'storeys' in data and data['storeys']:
             property_data['storeys'] = int(data['storeys'])
-        if data.get('furnishing'):
+        if 'furnishing' in data:
             property_data['furnishing'] = data['furnishing']
-        if data.get('condition'):
+        if 'condition' in data:
             property_data['condition'] = data['condition']
-        if data.get('yearBuilt'):
+        if 'yearBuilt' in data and data['yearBuilt']:
             property_data['yearBuilt'] = int(data['yearBuilt'])
 
         # Description
-        if data.get('description'):
+        if 'description' in data:
             property_data['description'] = data['description'].strip()
 
         # Arrays
-        property_data['amenities'] = self._parse_json_array(data.get('amenities', []))
-        property_data['interiorFeatures'] = self._parse_json_array(data.get('interiorFeatures', []))
-        property_data['buildingAmenities'] = self._parse_json_array(data.get('buildingAmenities', []))
-        property_data['utilities'] = self._parse_json_array(data.get('utilities', []))
-        property_data['terms'] = self._parse_json_array(data.get('terms', []))
+        if 'amenities' in data:
+            property_data['amenities'] = self._parse_json_array(data['amenities'])
+        if 'interiorFeatures' in data:
+            property_data['interiorFeatures'] = self._parse_json_array(data['interiorFeatures'])
+        if 'buildingAmenities' in data:
+            property_data['buildingAmenities'] = self._parse_json_array(data['buildingAmenities'])
+        if 'utilities' in data:
+            property_data['utilities'] = self._parse_json_array(data['utilities'])
+        if 'terms' in data:
+            property_data['terms'] = self._parse_json_array(data['terms'])
 
         # Nearby establishments
-        property_data['nearbySchools'] = self._parse_nearby_establishments(data.get('nearbySchools', []))
-        property_data['nearbyHospitals'] = self._parse_nearby_establishments(data.get('nearbyHospitals', []))
-        property_data['nearbyMalls'] = self._parse_nearby_establishments(data.get('nearbyMalls', []))
-        property_data['nearbyTransport'] = self._parse_nearby_establishments(data.get('nearbyTransport', []))
-        property_data['nearbyOffices'] = self._parse_nearby_establishments(data.get('nearbyOffices', []))
+        if 'nearbySchools' in data:
+            property_data['nearbySchools'] = self._parse_nearby_establishments(data['nearbySchools'])
+        if 'nearbyHospitals' in data:
+            property_data['nearbyHospitals'] = self._parse_nearby_establishments(data['nearbyHospitals'])
+        if 'nearbyMalls' in data:
+            property_data['nearbyMalls'] = self._parse_nearby_establishments(data['nearbyMalls'])
+        if 'nearbyTransport' in data:
+            property_data['nearbyTransport'] = self._parse_nearby_establishments(data['nearbyTransport'])
+        if 'nearbyOffices' in data:
+            property_data['nearbyOffices'] = self._parse_nearby_establishments(data['nearbyOffices'])
 
         # Legal & Financial
-        if data.get('ownershipStatus'):
+        if 'ownershipStatus' in data and data['ownershipStatus']:
             property_data['ownershipStatus'] = data['ownershipStatus'].strip()
-        if data.get('taxStatus'):
+        if 'taxStatus' in data and data['taxStatus']:
             property_data['taxStatus'] = data['taxStatus'].strip()
-        if data.get('associationDues'):
+        if 'associationDues' in data and data['associationDues']:
             property_data['associationDues'] = float(data['associationDues'])
 
         # Availability
-        if data.get('availabilityDate'):
+        if 'availabilityDate' in data:
             property_data['availabilityDate'] = data['availabilityDate']
-        if data.get('minimumLeasePeriod'):
+        if 'minimumLeasePeriod' in data and data['minimumLeasePeriod']:
             property_data['minimumLeasePeriod'] = data['minimumLeasePeriod'].strip()
-        if data.get('petPolicy'):
+        if 'petPolicy' in data:
             property_data['petPolicy'] = data['petPolicy'].strip()
-        if data.get('smokingPolicy'):
+        if 'smokingPolicy' in data:
             property_data['smokingPolicy'] = data['smokingPolicy'].strip()
 
         # Agent info
-        if data.get('agentName'):
+        if 'agentName' in data and data['agentName']:
             property_data['agentName'] = data['agentName'].strip()
-        if data.get('agentPhone'):
+        if 'agentPhone' in data and data['agentPhone']:
             property_data['agentPhone'] = data['agentPhone'].strip()
-        if data.get('agentEmail'):
+        if 'agentEmail' in data and data['agentEmail']:
             property_data['agentEmail'] = data['agentEmail'].strip()
-        if data.get('agentExperience'):
+        if 'agentExperience' in data and data['agentExperience']:
             property_data['agentExperience'] = int(data['agentExperience'])
-        if data.get('agentBio'):
+        if 'agentBio' in data and data['agentBio']:
             property_data['agentBio'] = data['agentBio'].strip()
 
         # Developer info
-        property_data['hasDeveloper'] = data.get('hasDeveloper') == 'true'
-        if data.get('developerName'):
+        if 'hasDeveloper' in data:
+            property_data['hasDeveloper'] = data['hasDeveloper'] == 'true'
+        if 'developerName' in data and data['developerName']:
             property_data['developerName'] = data['developerName'].strip()
-        if data.get('developerWebsite'):
+        if 'developerWebsite' in data and data['developerWebsite']:
             property_data['developerWebsite'] = data['developerWebsite'].strip()
-        if data.get('developerPhone'):
+        if 'developerPhone' in data and data['developerPhone']:
             property_data['developerPhone'] = data['developerPhone'].strip()
-        if data.get('developerEmail'):
+        if 'developerEmail' in data and data['developerEmail']:
             property_data['developerEmail'] = data['developerEmail'].strip()
-        if data.get('developerYears'):
+        if 'developerYears' in data and data['developerYears']:
             property_data['developerYears'] = int(data['developerYears'])
-        if data.get('developerBio'):
+        if 'developerBio' in data and data['developerBio']:
             property_data['developerBio'] = data['developerBio'].strip()
 
         # Metadata

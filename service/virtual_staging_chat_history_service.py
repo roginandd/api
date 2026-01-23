@@ -18,8 +18,8 @@ class VirtualStagingChatHistoryService:
     def create_chat_history(self,
                            history_id: str,
                            session_id: str,
-                           property_id: int,
-                           user_id: int) -> Optional[VirtualStagingChatHistory]:
+                           property_id: str,
+                           user_id: str) -> Optional[VirtualStagingChatHistory]:
         """Create new chat history for staging session"""
         if not self._validate_history(history_id, session_id, property_id, user_id):
             return None
@@ -40,7 +40,7 @@ class VirtualStagingChatHistoryService:
         """Get chat history for a staging session"""
         return self.repository.get_history_by_session(session_id)
     
-    def get_histories_by_property(self, property_id: int) -> List[tuple[str, VirtualStagingChatHistory]]:
+    def get_histories_by_property(self, property_id: str) -> List[tuple[str, VirtualStagingChatHistory]]:
         """Get all chat histories for a property"""
         return self.repository.get_histories_by_property(property_id)
     
@@ -136,11 +136,11 @@ class VirtualStagingChatHistoryService:
         return self.repository.delete_history(history_id)
     
     def _validate_history(self, history_id: str, session_id: str,
-                         property_id: int, user_id: int) -> bool:
+                         property_id: str, user_id: str) -> bool:
         """Validate history fields"""
         return (
             history_id and history_id.strip() and
             session_id and session_id.strip() and
-            property_id > 0 and
-            user_id > 0
+            property_id and property_id.strip() and
+            user_id and user_id.strip()
         )

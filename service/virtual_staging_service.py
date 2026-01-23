@@ -35,8 +35,8 @@ class VirtualStagingService:
     
     def create_staging_session_from_s3(self,
                               session_id: str,
-                              property_id: int,
-                              user_id: int,
+                              property_id: str,
+                              user_id: str,
                               room_name: str,
                               original_image_url: str,
                               staging_parameters: StagingParameters) -> Optional[VirtualStaging]:
@@ -115,8 +115,8 @@ class VirtualStagingService:
     
     def create_staging_session(self,
                               session_id: str,
-                              property_id: int,
-                              user_id: int,
+                              property_id: str,
+                              user_id: str,
                               room_name: str,
                               original_image_path: str,
                               staging_parameters: StagingParameters) -> Optional[VirtualStaging]:
@@ -283,13 +283,7 @@ class VirtualStagingService:
                 
                 print(f"[STAGING] Chat history updated for session {session_id}")
             
-            # Convert local image to base64 for response (use local_path directly)
-            import base64
-            with open(local_path, 'rb') as f:
-                image_data = base64.b64encode(f.read()).decode('utf-8')
-            image_data_url = f"data:image/png;base64,{image_data}"
-            
-            # Build response
+            # Build response with S3 URL
             metadata = StagingMetadata(
                 session_id=session_id,
                 property_id=session.property_id,
@@ -306,7 +300,7 @@ class VirtualStagingService:
             )
             
             return VirtualStagingResponse(
-                image_url=image_data_url,
+                image_url=upload_result["url"],  # Use S3 URL instead of local base64
                 metadata=metadata,
                 prompt_used=prompt,
                 furniture_list=None,
@@ -519,7 +513,7 @@ class VirtualStagingService:
         """Get staging session by ID"""
         return self.repository.get_session(session_id)
     
-    def get_sessions_by_property(self, property_id: int) -> List[Tuple[str, VirtualStaging]]:
+    def get_sessions_by_property(self, property_id: str) -> List[Tuple[str, VirtualStaging]]:
         """Get all sessions for a property"""
         return self.repository.get_sessions_by_property(property_id)
     
@@ -541,6 +535,26 @@ class VirtualStagingService:
             if session.saved_versions:
                 last_saved_url = session.saved_versions[-1].image_url
             
+            # Get panoramic images from the property
+            panoramic_images = []
+            try:
+                from service.property_service import PropertyService
+                property_service = PropertyService()
+                property_obj = property_service.get_property(session.property_id)
+                if property_obj:
+                    panoramic_images = [
+                        {
+                            'id': img.id,
+                            'url': img.url,
+                            'filename': img.filename,
+                            'imageType': img.imageType
+                        }
+                        for img in property_obj.images 
+                        if img.imageType == "panoramic"
+                    ]
+            except Exception as e:
+                print(f"Warning: Could not load panoramic images for session {session_id}: {str(e)}")
+            
             params_dict = session.current_parameters.model_dump() if session.current_parameters else {}
             
             response = StagingSessionResponse(
@@ -551,6 +565,7 @@ class VirtualStagingService:
                 original_image_url=session.original_image_url,
                 current_image_url=session.current_image_url,
                 last_saved_image_url=last_saved_url,
+                panoramic_images=panoramic_images,
                 staging_parameters=params_dict,
                 current_version=session.version,
                 total_versions=len(session.saved_versions),
@@ -762,13 +777,13 @@ class VirtualStagingService:
             print(f"Error deleting session: {str(e)}")
             return False
     
-    def _validate_staging(self, session_id: str, property_id: int, user_id: int,
+    def _validate_staging(self, session_id: str, property_id: str, user_id: str,
                          room_name: str) -> bool:
         """Validate staging fields"""
         return (
             session_id and session_id.strip() and
-            property_id > 0 and
-            user_id > 0 and
+            property_id and property_id.strip() and
+            user_id and user_id.strip() and
             room_name and room_name.strip()
         )
 
