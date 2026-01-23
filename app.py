@@ -9,17 +9,21 @@ from datetime import datetime
 # Import the Blueprints from controllers
 from controllers.virtual_staging_controller import virtual_staging_bp
 from controllers.aws_s3_controller import aws_s3_bp
+from controllers.property_controller import property_bp
+from controllers.inquiry_controller import inquiry_bp
 
 # Create Flask app
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
 
-# Enable CORS
-CORS(app)
+# Enable CORS with specific origins for development
+CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"], supports_credentials=True)
 
 # Register the Blueprints
 app.register_blueprint(virtual_staging_bp)
 app.register_blueprint(aws_s3_bp)
+app.register_blueprint(property_bp)
+app.register_blueprint(inquiry_bp)
 
 
 # Health check endpoint
@@ -90,7 +94,16 @@ if __name__ == '__main__':
     print("   • GET    /api/aws-s3/info/<key> - Get file metadata")
     print("   • POST   /api/aws-s3/batch/delete - Delete multiple files")
     print("   • POST   /api/aws-s3/batch/info - Get info for multiple files")
-    print("\n🏥 Health Check:")
+    print("\n� Property Management Endpoints:")
+    print("   • POST   /api/properties - Create property")
+    print("   • GET    /api/properties - Get all properties")
+    print("   • GET    /api/properties/<id> - Get property by ID")
+    print("   • PUT    /api/properties/<id> - Update property")
+    print("   • DEL    /api/properties/<id> - Delete property")
+    print("   • POST   /api/properties/<id>/images - Upload property images")
+    print("   • GET    /api/property-types - Get property types")
+    print("   • GET    /api/amenities - Get amenities options")
+    print("\n�🏥 Health Check:")
     print("   • GET    /health - Health check")
     print("=" * 70)
     print()
