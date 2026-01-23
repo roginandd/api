@@ -11,6 +11,7 @@ from controllers.virtual_staging_controller import virtual_staging_bp
 from controllers.aws_s3_controller import aws_s3_bp
 from controllers.property_controller import property_bp
 from controllers.inquiry_controller import inquiry_bp
+from controllers.mark_controller import mark_bp
 
 # Create Flask app
 app = Flask(__name__)
@@ -24,6 +25,7 @@ app.register_blueprint(virtual_staging_bp)
 app.register_blueprint(aws_s3_bp)
 app.register_blueprint(property_bp)
 app.register_blueprint(inquiry_bp)
+app.register_blueprint(mark_bp)
 
 
 # Health check endpoint
