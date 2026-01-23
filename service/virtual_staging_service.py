@@ -97,14 +97,13 @@ class VirtualStagingService:
             
             print(f"[SESSION] Chat history created: {chat_history_id}")
             
-            # Create session in database with S3 URLs and local path reference
+            # Create session in database with S3 URLs (no local paths for deployment)
             staging = VirtualStaging(
                 session_id=session_id,
                 property_id=property_id,
                 user_id=user_id,
                 room_name=room_name,
                 chat_history_id=chat_history_id,
-                original_image_path=original_image_path,  # Keep local path for processing
                 orignal_image_key=upload_result.get("key"),  # S3 key
                 original_image_url=upload_result.get("url"),  # S3 URL
                 current_parameters=staging_parameters,
@@ -155,26 +154,28 @@ class VirtualStagingService:
                 return None
             
             # Determine which image to use: override, current, or original
-            image_path = image_path_override or session.current_image_path or session.original_image_path
+            # Priority: image_path_override > session.current_image_url > session.original_image_url
+            image_url = image_path_override
+            if not image_url:
+                image_url = session.current_image_url or session.original_image_url
             
-            # Validate image path - it can be a local path, S3 URL, or we'll get it from session
-            # Only validate local paths here; S3 URLs will be validated in gemini_service
-            if image_path and not (image_path.startswith('http://') or image_path.startswith('https://')):
-                # Local path - check if it exists
-                if not os.path.exists(image_path):
-                    # Try to reconstruct path from session_id
-                    reconstructed_path = str(Path('uploads') / f"original_{session_id}.png")
-                    if os.path.exists(reconstructed_path):
-                        image_path = reconstructed_path
-                        print(f"[STAGING] Using reconstructed path: {reconstructed_path}")
-                    else:
-                        print(f"Error: Original image not found for session {session_id}")
-                        print(f"  Expected path: {image_path}")
-                        print(f"  Reconstructed: {reconstructed_path}")
-                        # Don't return None yet - gemini_service will validate and get from session if needed
-                        image_path = None
+            # Validate and prepare image for processing
+            if not image_url:
+                print(f"Error: No image URL found for session {session_id}")
+                return None
             
-            # Note: image_path can be None here - gemini_service will get it from session
+            # If it's an S3 URL, we'll pass it to gemini_service which will download it
+            # If it's a local path (for backward compatibility), validate it exists
+            if not (image_url.startswith('http://') or image_url.startswith('https://')):
+                # Local path - check if it exists (backward compatibility)
+                if not os.path.exists(image_url):
+                    print(f"Error: Local image not found: {image_url}")
+                    return None
+                print(f"[STAGING] Using local image: {image_url}")
+            else:
+                print(f"[STAGING] Using S3 image URL: {image_url}")
+            
+            # Note: image_url is now guaranteed to be valid (either existing local path or S3 URL)
             
             # Use provided parameters or fall back to session parameters
             params = staging_parameters or session.current_parameters
@@ -224,22 +225,24 @@ class VirtualStagingService:
                 print(f"Failed to generate image for session {session_id}")
                 return None
             
-            # Save generated image locally (working version - not yet saved to AWS)
-            upload_folder = Path('uploads')
-            upload_folder.mkdir(parents=True, exist_ok=True)
+            # Upload generated image to S3 (working version - not yet saved permanently)
+            upload_result = self.aws_service.upload_bytes(
+                image_bytes=generated_image_bytes,
+                filename=f"generated_{session_id}_v{session.version + 1}.png",
+                folder=f"staging/{session_id}",
+                content_type="image/png"
+            )
             
-            local_filename = f"generated_{session_id}_v{session.version + 1}.png"
-            local_path = upload_folder / local_filename
+            if not upload_result.get("success"):
+                print(f"Failed to upload generated image to S3: {upload_result.get('error')}")
+                return None
             
-            with open(local_path, 'wb') as f:
-                f.write(generated_image_bytes)
+            print(f"[STAGING] Uploaded generated image to S3: {upload_result['url']}")
             
-            print(f"[STAGING] Saved generated image locally: {local_path}")
-            
-            # Store in session as unsaved working version (local only)
-            session.current_image_path = str(local_path)
-            session.current_image_key = None
-            session.current_image_url = None
+            # Store in session as unsaved working version (S3 URL)
+            session.current_image_path = None  # No longer using local paths
+            session.current_image_key = upload_result["key"]
+            session.current_image_url = upload_result["url"]
             session.current_parameters = params
             session.current_prompt = prompt
             session.updated_at = datetime.utcnow()

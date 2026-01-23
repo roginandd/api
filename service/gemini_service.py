@@ -32,7 +32,7 @@ class GeminiService:
         Read an image file and encode it to base64
         
         Args:
-            image_path: Path to the image file
+            image_path: Path to the image file or S3 URL
         
         Returns:
             Base64 encoded string of the image
@@ -41,11 +41,23 @@ class GeminiService:
             FileNotFoundError: If image file doesn't exist
             IOError: If file cannot be read
         """
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image file not found: {image_path}")
+        # Check if it's an S3 URL
+        if image_path.startswith('http://') or image_path.startswith('https://'):
+            # Download from S3
+            from service.aws_service import AWSService
+            download_result = AWSService.download_image_bytes(image_path)
+            if not download_result["success"]:
+                raise IOError(f"Failed to download image from S3: {download_result['error']}")
+            image_bytes = download_result["bytes"]
+        else:
+            # Local file
+            if not os.path.exists(image_path):
+                raise FileNotFoundError(f"Image file not found: {image_path}")
+            
+            with open(image_path, 'rb') as image_file:
+                image_bytes = image_file.read()
         
-        with open(image_path, 'rb') as image_file:
-            return base64.standard_b64encode(image_file.read()).decode('utf-8')
+        return base64.standard_b64encode(image_bytes).decode('utf-8')
 
     @staticmethod
     def apply_staging_filters(image: Image.Image, style: str = "modern") -> Image.Image:
@@ -90,23 +102,46 @@ class GeminiService:
     @staticmethod
     def get_image_mime_type(image_path: str) -> str:
         """
-        Determine MIME type from image file extension
+        Determine MIME type from image file extension or S3 URL
         
         Args:
-            image_path: Path to the image file
+            image_path: Path to the image file or S3 URL
         
         Returns:
             MIME type string (e.g., 'image/jpeg', 'image/png')
         """
-        _, ext = os.path.splitext(image_path.lower())
-        mime_types = {
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.png': 'image/png',
-            '.gif': 'image/gif',
-            '.webp': 'image/webp'
-        }
-        return mime_types.get(ext, 'image/jpeg')
+        # Check if it's an S3 URL
+        if image_path.startswith('http://') or image_path.startswith('https://'):
+            # Try to get MIME type from URL extension first
+            _, ext = os.path.splitext(image_path.lower())
+            mime_types = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp'
+            }
+            mime_type = mime_types.get(ext, 'image/jpeg')
+            
+            # If we can't determine from extension, try to download and check
+            if ext == '':
+                from service.aws_service import AWSService
+                download_result = AWSService.download_image_bytes(image_path)
+                if download_result["success"]:
+                    mime_type = download_result.get("content_type", "image/png")
+            
+            return mime_type
+        else:
+            # Local file - use extension
+            _, ext = os.path.splitext(image_path.lower())
+            mime_types = {
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.png': 'image/png',
+                '.gif': 'image/gif',
+                '.webp': 'image/webp'
+            }
+            return mime_types.get(ext, 'image/jpeg')
 
     def generate_image_from_text(self, model: str, prompt: str) -> Optional[str]:
         """
@@ -139,7 +174,7 @@ class GeminiService:
             model: Model name (overridden to gemini-2.5-flash-image)
             prompt: Staging parameters (style, furniture, colors, etc)
             session: VirtualStaging session object to get the latest image from (preferred)
-            image_path: Path to the input room image (local path or S3 URL) - used as fallback if session not provided
+            image_path: S3 URL to the input room image - used as fallback if session not provided
             mask_image_path: Optional path to mask image for specifying a specific area/point
         
         Returns:
@@ -185,22 +220,18 @@ class GeminiService:
                 print(f"[STAGING] ❌ {error_msg}")
                 raise FileNotFoundError(error_msg)
             
-            # Load image - handle both local paths and S3 URLs
+            # Load image from S3 (remove local file dependency for deployment)
             try:
-                if isinstance(image_to_use, str) and (image_to_use.startswith('http://') or image_to_use.startswith('https://')):
-                    # Download from URL (S3)
-                    response = requests.get(image_to_use)
-                    response.raise_for_status()
-                    input_image = Image.open(BytesIO(response.content))
-                    print(f"[STAGING] Downloaded image from URL: {image_to_use[:50]}...")
-                else:
-                    # Local file path
-                    if not os.path.exists(image_to_use):
-                        raise FileNotFoundError(f"Image file not found: {image_to_use}")
-                    input_image = Image.open(image_to_use)
-                    print(f"[STAGING] Loaded local image: {image_to_use}")
+                if not isinstance(image_to_use, str) or not (image_to_use.startswith('http://') or image_to_use.startswith('https://')):
+                    raise ValueError(f"Image must be an S3 URL for deployment. Received: {image_to_use}")
+                
+                # Download from S3 URL
+                response = requests.get(image_to_use, timeout=30)
+                response.raise_for_status()
+                input_image = Image.open(BytesIO(response.content))
+                print(f"[STAGING] Downloaded image from S3: {image_to_use[:50]}...")
             except Exception as e:
-                print(f"[STAGING] ❌ Error loading image: {str(e)}")
+                print(f"[STAGING] ❌ Error loading image from S3: {str(e)}")
                 raise
             
             # Build comprehensive staging prompt

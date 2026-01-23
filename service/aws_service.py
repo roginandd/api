@@ -212,6 +212,84 @@ class AWSService:
             return False
 
     @staticmethod
+    def download_image_bytes(s3_url: str) -> dict:
+        """
+        Download an image from S3 URL as bytes.
+        
+        Args:
+            s3_url: The S3 URL of the image
+            
+        Returns:
+            dict with success status and image bytes or error message
+        """
+        try:
+            # Extract S3 key from URL
+            # URL format: https://bucket.s3.region.amazonaws.com/key
+            url_parts = s3_url.replace('https://', '').split('/')
+            bucket_name = url_parts[0].split('.')[0]
+            s3_key = '/'.join(url_parts[1:])
+            
+            # Download from S3
+            response = AWSConfig.s3.get_object(
+                Bucket=bucket_name,
+                Key=s3_key
+            )
+            
+            image_bytes = response['Body'].read()
+            
+            return {
+                "success": True,
+                "bytes": image_bytes,
+                "content_type": response.get('ContentType', 'image/png'),
+                "size": len(image_bytes)
+            }
+        except ClientError as e:
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def download_image_pil(s3_url: str) -> dict:
+        """
+        Download an image from S3 URL as PIL Image object.
+        
+        Args:
+            s3_url: The S3 URL of the image
+            
+        Returns:
+            dict with success status and PIL Image object or error message
+        """
+        try:
+            result = AWSService.download_image_bytes(s3_url)
+            if not result["success"]:
+                return result
+            
+            # Convert bytes to PIL Image
+            image = Image.open(BytesIO(result["bytes"]))
+            
+            return {
+                "success": True,
+                "image": image,
+                "content_type": result["content_type"],
+                "size": result["size"]
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def get_s3_key_from_url(s3_url: str) -> str:
+        """
+        Extract S3 key from S3 URL.
+        
+        Args:
+            s3_url: The S3 URL
+            
+        Returns:
+            S3 key (path) of the object
+        """
+        # URL format: https://bucket.s3.region.amazonaws.com/key
+        url_parts = s3_url.replace('https://', '').split('/')
+        return '/'.join(url_parts[1:])
+
+    @staticmethod
     def upload_property_image(file, property_id: str, image_type: str) -> dict:
         """
         Upload a property image to S3 with thumbnail generation.
