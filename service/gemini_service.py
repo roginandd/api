@@ -332,11 +332,17 @@ If the request is vague (e.g., "make it blue"), you must infer the most sophisti
             print(f"[STAGING] ❌ Error during staging: {str(e)}")
             raise
     
-    def chat_with_mark(self, user_query: str):
+    def chat_with_mark(self, user_query: str, history: list = None):
         """
         The production-ready chatbot logic for Mark AI.
+        Processes a chat message with persistent history.
+        'history' should be a list of dicts: [{'role': 'user', 'parts': [{'text': '...'}]}, ...]
         """
-        # 1. Define the constraints and context
+
+        if history is None:
+            history = []
+
+        # Define the constraints and context here:
         system_instruction = f"""
         You are Mark, the AI Real Estate Assistant for Vista. 
         For context here is the Vista's full features:
@@ -392,16 +398,19 @@ If the request is vague (e.g., "make it blue"), you must infer the most sophisti
         - Do not overwhelm; keep answers under 3 sentences unless asked for details.
         """
 
-        # 2. Use the unified client to talk to the chatbot model
-        # We use gemini-3-flash for speed and better constraint following
-        response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=user_query,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.1, # Low temperature = High accuracy
-                # tools=[get_upgrade_estimate]  <-- This is where programmatic tasks go
+        current_user_message = {"role": "user", "parts": [{"text": user_query}]}
+        full_contents = history + [current_user_message]
+
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=full_contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.1
+                )
             )
-        )
-        
-        return response.text
+            return response.text
+        except Exception as e:
+            print(f"Chat Error: {str(e)}")
+            return "I'm having trouble connecting right now. Let's try again in a moment."

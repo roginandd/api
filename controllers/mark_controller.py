@@ -8,10 +8,13 @@ gemini_service = GeminiService()
 def chat():
     data = request.json
     user_message = data.get('message')
+    # Receive history from frontend; default to empty list if it's a new chat
+    chat_history = data.get('history', [])
 
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
     
-    response = gemini_service.chat_with_mark(user_message)
+    # We now pass the history into our service method
+    response = gemini_service.chat_with_mark(user_message, history=chat_history)
     
     return jsonify({"reply": response})
