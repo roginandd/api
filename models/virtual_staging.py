@@ -74,6 +74,7 @@ class VirtualStaging(BaseModel):
     # Current state (working version - not yet saved)
     current_image_key: Optional[str] = Field(default=None, description="S3 key of current working image")
     current_image_url: Optional[str] = Field(default=None, description="Full URL of current working image")
+    current_image_urls: Dict[int, str] = Field(default_factory=dict, description="Dictionary mapping panoramic image indices to their current working (unsaved) image URLs")
     current_image_path: Optional[str] = Field(default=None, description="Local file path of current working image")
     current_parameters: Optional[StagingParameters] = Field(default=None, description="Parameters for current working image")
     current_prompt: Optional[str] = Field(default=None, description="Prompt used for current working image")
@@ -110,6 +111,7 @@ class VirtualStaging(BaseModel):
             'original_image_path': self.original_image_path,
             'current_image_key': self.current_image_key,
             'current_image_url': self.current_image_url,
+            'current_image_urls': {str(k): v for k, v in self.current_image_urls.items()},  # Convert int keys to strings for Firestore
             'current_image_path': self.current_image_path,
             'current_prompt': self.current_prompt,
             'version': self.version,
@@ -145,6 +147,10 @@ class VirtualStaging(BaseModel):
         # Handle current parameters
         if isinstance(data.get('current_parameters'), dict):
             data['current_parameters'] = StagingParameters(**data['current_parameters'])
+        
+        # Handle current_image_urls - convert string keys back to integers
+        if isinstance(data.get('current_image_urls'), dict):
+            data['current_image_urls'] = {int(k): v for k, v in data['current_image_urls'].items()}
         
         # Handle saved versions
         if isinstance(data.get('saved_versions'), list):

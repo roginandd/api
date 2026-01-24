@@ -1,5 +1,5 @@
 from config.gemini_config import get_gemini_client
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import base64
 import os
 import io
@@ -12,11 +12,90 @@ from io import BytesIO
 from google.genai import types
 
 
+# Static furniture inventory (placeholder data)
+FURNITURE_INVENTORY = [
+    {"id": "F001", "name": "Modern Office Chair", "color": "Black", "type": "Chair", "style": "Modern", "material": "Leather"},
+    {"id": "F002", "name": "Velvet Lounge Seat", "color": "Red", "type": "Chair", "style": "Contemporary", "material": "Velvet"},
+    {"id": "F003", "name": "Oak Dining Table", "color": "Brown", "type": "Table", "style": "Traditional", "material": "Oak"},
+    {"id": "F004", "name": "Glass Coffee Table", "color": "Clear", "type": "Table", "style": "Modern", "material": "Glass"},
+    {"id": "F005", "name": "L-Shape Sectional Sofa", "color": "Gray", "type": "Sofa", "style": "Contemporary", "material": "Fabric"},
+    {"id": "F006", "name": "White Leather Couch", "color": "White", "type": "Sofa", "style": "Modern", "material": "Leather"},
+    {"id": "F007", "name": "Wooden Bookshelf", "color": "Walnut", "type": "Storage", "style": "Scandinavian", "material": "Wood"},
+    {"id": "F008", "name": "Metal Floor Lamp", "color": "Black", "type": "Lighting", "style": "Industrial", "material": "Metal"},
+    {"id": "F009", "name": "Ceramic Table Lamp", "color": "White", "type": "Lighting", "style": "Contemporary", "material": "Ceramic"},
+    {"id": "F010", "name": "Industrial Desk", "color": "Black and Brown", "type": "Desk", "style": "Industrial", "material": "Metal and Wood"},
+]
+
+furniture = {
+    "furniture_id": str,
+    "color": str,
+    "type": str,
+    "price": float,
+    "image_url": str,
+    "shop_url": str
+}
+
+
 class GeminiService:
     """Service to interact with Gemini API"""
 
     def __init__(self):
         self.client = get_gemini_client()
+
+
+    def find_furniture_by_prompt(self, prompt: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a furniture item with STRICT validation. 
+        It will reject "Brown Santa Claus" but accept "Brown Chair".
+        """
+        try:
+            # STRICTER PROMPT
+            search_prompt = f"""
+            You are a strict inventory matcher for a furniture store.
+            Inventory:
+            {json.dumps(FURNITURE_INVENTORY, indent=2)}
+
+            User Request: "{prompt}"
+
+            Instructions:
+            1. **Validation Step**: First, analyze if the User Request is actually asking for a piece of furniture that exists in our inventory categories (e.g., Chair, Table, Sofa).
+            2. **Rejection Rule**: If the user asks for a person (e.g., "Santa Claus"), an animal, food, or an object NOT in the inventory, return {{"error": "Request is not furniture"}}, EVEN IF the color matches.
+            3. **Matching Step**: Only if the object type matches, find the specific item based on color, style, or material.
+            4. **Output**: Return ONLY the JSON object of the match, or the error JSON.
+            """
+            
+            # Call Gemini with JSON Mode enabled (No need to parse markdown manually)
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash", # or gemini-1.5-flash
+                contents=search_prompt,
+                config={ 
+                        "response_mime_type": "application/json" 
+                    }
+            )
+            
+            # Parse result directly
+            result = json.loads(response.text)
+            
+            # Handle the logic
+            if "error" in result:
+                print(f"[FURNITURE] Blocked invalid request: {result['error']}")
+                return None
+                
+            print(f"[FURNITURE] Found: {result.get('name')} (ID: {result.get('id')})")
+            return result
+
+        except Exception as e:
+            print(f"[FURNITURE] System Error: {str(e)}")
+            return None
+    
+    def get_furniture_inventory(self) -> List[Dict[str, Any]]:
+        """
+        Get the complete furniture inventory.
+        
+        Returns:
+            List of all furniture items in the inventory
+        """
+        return FURNITURE_INVENTORY
 
     def generate_content(self, model: str, contents: str) -> str:
         """Generate content using Gemini model"""

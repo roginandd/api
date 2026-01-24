@@ -162,8 +162,17 @@ class VirtualStagingService:
                 print(f"Error: Invalid image_index {image_index}. Available: 0-{len(session.panoramic_images)-1}")
                 return None
             
-            # Get the current panoramic image at this index (which may have been updated from previous generations)
-            image_url = session.panoramic_images[image_index]
+            # Get the image to generate on:
+            # If there's a working version for this index, use it (continue editing)
+            # Otherwise, use the panoramic image at this index (start fresh)
+            if image_index in session.current_image_urls and session.current_image_urls[image_index]:
+                # Continue generating on the unsaved working version for this index
+                image_url = session.current_image_urls[image_index]
+                print(f"[STAGING] Generating on unsaved working version for index {image_index}")
+            else:
+                # Start fresh generation on this index's panoramic image (original or previously saved)
+                image_url = session.panoramic_images[image_index]
+                print(f"[STAGING] Generating on panoramic image at index {image_index}")
             
             # Update current index being worked on
             session.current_image_index = image_index
@@ -222,12 +231,12 @@ class VirtualStagingService:
             print(f"{prompt}")
             print(f"[STAGING] ========== END PROMPT ==========\n")
             
-            # Generate image using Gemini with session object (will get latest image)
+            # Generate image using Gemini with the specific panoramic image at image_index
             generated_image_bytes = self.gemini_service.generate_image_from_image(
                 model=self.gemini_model,
                 prompt=prompt,
-                session=session,
-                image_path=image_path_override,
+                session=None,  # Don't pass session - use specific image_url instead
+                image_path=image_url,  # Use the specific panoramic image at this index
                 mask_image_path=mask_image_url
             )
             
@@ -249,7 +258,8 @@ class VirtualStagingService:
             
             print(f"[STAGING] Uploaded generated image to S3: {upload_result['url']}")
             
-            # Store in session as unsaved working version (S3 URL)
+            # Store in session as unsaved working version for this index
+            session.current_image_urls[image_index] = upload_result["url"]
             session.current_image_path = None  # No longer using local paths
             session.current_image_key = upload_result["key"]
             session.current_image_url = upload_result["url"]
@@ -261,6 +271,7 @@ class VirtualStagingService:
             session.generation_history.append({
                 "timestamp": datetime.utcnow().isoformat(),
                 "image_key": session.current_image_key,
+                "image_index": image_index,
                 "prompt": prompt,
                 "parameters": params.model_dump() if params else None,
                 "saved": False
@@ -315,8 +326,8 @@ class VirtualStagingService:
     
     def save_change(self, session_id: str) -> Optional[SaveChangeResponse]:
         """
-        Save the current working version to history and upload to AWS S3.
-        This is where the working image becomes part of the permanent history in AWS.
+        Save the current working version to history.
+        Updates the panoramic_images array at the current index with the generated image URL.
         
         Args:
             session_id: Session ID
@@ -330,34 +341,19 @@ class VirtualStagingService:
                 print(f"Session {session_id} not found")
                 return None
             
-            if not session.current_image_path or not os.path.exists(session.current_image_path):
+            # Check if there's a current working image (S3 URL)
+            if not session.current_image_url:
                 print(f"No working image to save for session {session_id}")
                 return None
             
-            # Upload current working image to AWS S3
-            with open(session.current_image_path, 'rb') as f:
-                image_bytes = f.read()
-            
             new_version = session.version + 1
-            
-            upload_result = self.aws_service.upload_bytes(
-                image_bytes=image_bytes,
-                filename=f"v{new_version}_{session_id}.png",
-                folder=f"staging/{session_id}/versions",
-                content_type="image/png"
-            )
-            
-            if not upload_result.get("success"):
-                print(f"Failed to upload to AWS: {upload_result.get('error')}")
-                return None
-            
             now = datetime.utcnow()
             
-            # Create new saved version with AWS URLs
+            # Create new saved version with the current image URL
             image_version = ImageVersion(
                 version_number=new_version,
-                image_key=upload_result.get("key"),
-                image_url=upload_result.get("url"),
+                image_key=session.current_image_key,
+                image_url=session.current_image_url,
                 prompt_used=session.current_prompt or "",
                 parameters=session.current_parameters or StagingParameters(),
                 is_saved=True,
@@ -365,7 +361,7 @@ class VirtualStagingService:
                 saved_at=now
             )
             
-            print(f"[SAVE] Uploaded version {new_version} to AWS: {image_version.image_url}")
+            print(f"[SAVE] Saved version {new_version}: {image_version.image_url}")
             
             # Add to saved versions history
             session.saved_versions.append(image_version)
@@ -377,6 +373,11 @@ class VirtualStagingService:
             if session.current_image_index < len(session.panoramic_images):
                 session.panoramic_images[session.current_image_index] = image_version.image_url
                 print(f"[SAVE] Updated panoramic_images[{session.current_image_index}] with: {image_version.image_url}")
+                
+                # Clear the working version for this index since it's now saved
+                if session.current_image_index in session.current_image_urls:
+                    del session.current_image_urls[session.current_image_index]
+                    print(f"[SAVE] Cleared working version for index {session.current_image_index}")
             
             # Move from working to saved in generation history
             if session.generation_history:
@@ -391,7 +392,7 @@ class VirtualStagingService:
             return SaveChangeResponse(
                 success=True,
                 version=new_version,
-                message=f"Version {new_version} saved successfully to AWS",
+                message=f"Version {new_version} saved successfully",
                 image_url=image_version.image_url,
                 saved_at=now
             )

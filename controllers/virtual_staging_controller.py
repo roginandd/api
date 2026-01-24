@@ -239,12 +239,6 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         
         # Handle optional mask image for specific area/point
         mask_image_path = None
-        if 'image_mask' in request.files:
-            mask_file = request.files['image_mask']
-            if mask_file and mask_file.filename != '':
-                mask_image_path = save_uploaded_file(mask_file)
-                if not mask_image_path:
-                    return {'error': 'Invalid mask image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
         
         # Create staging parameters with optional theme
         staging_params = StagingParameters(
@@ -715,3 +709,53 @@ def get_chat_messages(session_id: str) -> Tuple[Dict[str, Any], int]:
     
     except Exception as e:
         return {'error': f'Error retrieving chat messages: {str(e)}'}, 500
+
+
+@virtual_staging_bp.route('/furniture/find', methods=['POST'])
+def find_furniture():
+    """Find a furniture item that matches the user's prompt"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'prompt' not in data:
+            return {'error': 'Missing required field: prompt'}, 400
+        
+        prompt = data.get('prompt', '').strip()
+        if not prompt:
+            return {'error': 'Prompt cannot be empty'}, 400
+        
+        # Find furniture using Gemini
+        furniture = vs_service.gemini_service.find_furniture_by_prompt(prompt)
+        
+        if not furniture:
+            return {
+                'success': False,
+                'message': 'No matching furniture found',
+                'furniture': None
+            }, 404
+        
+        return {
+            'success': True,
+            'message': 'Furniture found successfully',
+            'furniture': furniture
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error finding furniture: {str(e)}'}, 500
+
+
+@virtual_staging_bp.route('/furniture/inventory', methods=['GET'])
+def get_furniture_inventory():
+    """Get the complete furniture inventory"""
+    try:
+        inventory = vs_service.gemini_service.get_furniture_inventory()
+        
+        return {
+            'success': True,
+            'message': 'Furniture inventory retrieved successfully',
+            'total_items': len(inventory),
+            'inventory': inventory
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error getting furniture inventory: {str(e)}'}, 500
