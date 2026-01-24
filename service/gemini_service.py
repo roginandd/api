@@ -10,7 +10,8 @@ from PIL import Image, ImageEnhance, ImageFilter
 import requests
 from io import BytesIO
 from google.genai import types
-
+from google.genai.types import Tool, FunctionDeclaration, Schema, Type
+from repositories.property_repository import PropertyRepository
 
 # Static furniture inventory (placeholder data)
 FURNITURE_INVENTORY = [
@@ -41,6 +42,7 @@ class GeminiService:
 
     def __init__(self):
         self.client = get_gemini_client()
+        self.repo = PropertyRepository()
 
 
     def find_furniture_by_prompt(self, prompt: str) -> Optional[Dict[str, Any]]:
@@ -410,86 +412,165 @@ If the request is vague (e.g., "make it blue"), you must infer the most sophisti
         except Exception as e:
             print(f"[STAGING] ❌ Error during staging: {str(e)}")
             raise
-    
+
     def chat_with_mark(self, user_query: str, history: list = None):
         """
-        The production-ready chatbot logic for Mark AI.
-        Processes a chat message with persistent history.
-        'history' should be a list of dicts: [{'role': 'user', 'parts': [{'text': '...'}]}, ...]
+        Production-ready chatbot logic with Property Search Tool.
         """
-
         if history is None:
             history = []
 
-        # Define the constraints and context here:
-        system_instruction = f"""
-        You are Mark, the AI Real Estate Assistant for Vista. 
-        For context here is the Vista's full features:
-        1. AI-Driven Custom Virtual Staging 
-            • Instantly transform a property’s interior using AI—no physical staging, renovations, or redesign 
-            costs. 
-            • Modify furniture, wall art, layouts, color palettes, lighting, ambience, and overall “feel” of the 
-            space. 
-            • Changes are visualized directly on 360° panoramic images, helping users imagine the property as 
-            their own. 
-            • Eliminates the need for expensive physical staging while increasing emotional connection to the 
-            property. 
-        Echo – Voice-Driven Staging Partner 
-            • An AI assistant users can talk to while viewing the property in VR or 360° mode. 
-            • Users can say commands like: 
-                o “Change the sofa to a modern style” 
-                o “Make the room feel warmer” 
-                o “Add minimalist paintings” 
-            • Echo interprets voice commands and updates the space in real time, creating a hands-free, 
-            immersive experience. 
-        2. 360° Voice-Controlled VR Property Tours 
-            • Provides full 360° panoramic tours of every part of the property. 
-            • Works in multiple modes: 
-                o VR Box Mode: Insert a smartphone into an affordable VR box for an immersive 
-                walkthrough. 
-                o Remote Viewing: Buyers can explore properties from home if they own a VR box. 
-                o Standard 360° Mode: Users without VR hardware can still explore via touch and swipe, 
-                similar to Google Street View. 
-        • Reduces the need for repeated physical visits, saving time for both sellers and buyers. 
-        3. Interactive Real Estate Marketplace (Mark – AI Chatbot Support) 
-            • An AI chatbot embedded directly into the property listing experience. 
-            • Users can ask natural questions such as: 
-                o “How old is the property?” 
-                o “Is this area flood-safe?” 
-                o “What schools are nearby?” 
-                o “Is the price negotiable?” 
-            • Removes friction by replacing manual scrolling and information hunting with instant answers. 
-            • Keeps users engaged and informed without overwhelming them. 
-        4. Furniture & Upgrade Cost Approximation 
-            • As users customize interiors, AI automatically estimates: 
-                o Furniture prices 
-                o Renovation or upgrade costs 
-                o Budget ranges based on real online listings 
-            • Suggests where items can be purchased and provides realistic cost expectations. 
-            • Helps buyers validate ideas before committing—reducing financial uncertainty and regret. 
+        # 1. Define the Property Search Tool
+        search_tool = Tool(
+            function_declarations=[
+                FunctionDeclaration(
+                    name="search_properties",
+                    description="Search for properties based on user criteria like price, location, type, and amenities.",
+                    parameters=Schema(
+                        type=Type.OBJECT,
+                        properties={
+                            "keyword": Schema(
+                                type=Type.STRING, 
+                                description="Fuzzy search for address, name, or description"
+                            ),
+                            "propertyType": Schema(
+                                type=Type.STRING,
+                                description="Type of property",
+                                enum=["House", "Condo", "Apartment", "Lot", "Commercial"]
+                            ),
+                            "listingType": Schema(
+                                type=Type.STRING,
+                                description="Listing category",
+                                enum=["For Sale", "For Rent", "For Lease"]
+                            ),
+                            "minPrice": Schema(type=Type.NUMBER, description="Minimum price budget"),
+                            "maxPrice": Schema(type=Type.NUMBER, description="Maximum price budget"),
+                            "bedrooms": Schema(type=Type.NUMBER, description="Minimum number of bedrooms"),
+                            "bathrooms": Schema(type=Type.NUMBER, description="Minimum number of bathrooms"),
+                            "priceNegotiable": Schema(type=Type.BOOLEAN, description="If price is negotiable"),
+                            "parkingAvailable": Schema(type=Type.BOOLEAN, description="If parking is required"),
+                            "petPolicy": Schema(
+                                type=Type.STRING,
+                                enum=["Pets allowed", "No pets allowed", "Pets allowed with restrictions"]
+                            ),
+                            "amenities": Schema(
+                                type=Type.ARRAY,
+                                items=Schema(type=Type.STRING),
+                                description="List of required amenities (e.g., 'Swimming Pool', 'Gym')"
+                            ),
+                            "interiorFeatures": Schema(
+                                type=Type.ARRAY,
+                                items=Schema(type=Type.STRING),
+                                description="Interior features (e.g. 'Marble Floors')"
+                            ),
+                            "utilities": Schema(
+                                type=Type.ARRAY,
+                                items=Schema(type=Type.STRING),
+                                description="Utilities (e.g. 'Internet readiness')"
+                            ),
+                            "furnishing": Schema(
+                                type=Type.STRING,
+                                description="Furnishing status",
+                                enum=["Fully furnished", "Semi-furnished", "Unfurnished"]
+                            ),
+                            "storeys": Schema(
+                                type=Type.NUMBER, 
+                                description="Minimum number of storeys/floors"
+                            )
+                        },
+                    )
+                )
+            ]
+        )
 
+        # 2. Define the System Instruction
+        system_instruction = """
+        You are Mark, the AI Real Estate Assistant for Vista.
         
-        STRICT RULES:
-        - ONLY discuss this property, real estate trends, or Vista app features.
-        - If the user is rude or asks unrelated questions (politics, games, etc.), 
-          redirect them: "I'm here to help with your property search. Let's focus on Vista." and append with suggestion messages.
-        - Use the provided context for accurate answers. If data is missing, say so.
-        - Do not overwhelm; keep answers under 3 sentences unless asked for details.
+        ### YOUR DATA CONTEXT
+        You have access to a database of properties with the following schema. 
+        Use these field definitions and Enums to understand user requests.
+
+        {
+            "property": {
+                "name": "String",
+                "description": "String",
+                "propertyType": "Enum: ['House', 'Condo', 'Apartment', 'Lot', 'Commercial']",
+                "listingType": "Enum: ['For Sale', 'For Rent', 'For Lease']",
+                "price": "Number (Float)",
+                "priceNegotiable": "Boolean",
+                "address": "String (City, Province, Street)",
+                "floorArea": "Number (sqm)",
+                "lotArea": "Number (sqm)",
+                "bedrooms": "Number",
+                "bathrooms": "Number",
+                "storeys": "Number",
+                "furnishing": "Enum: ['Fully furnished', 'Semi-furnished', 'Unfurnished']",
+                "condition": "Enum: ['New', 'Well-maintained', 'Renovated', 'Needs repair']",
+                "parkingAvailable": "Boolean",
+                "parkingSlots": "Number",
+                "availabilityDate": "Date (YYYY-MM-DD)",
+                "petPolicy": "Enum: ['Pets allowed', 'No pets allowed', 'Pets allowed with restrictions', 'Pets allowed with deposit', 'Service animals only']",
+                "smokingPolicy": "Enum: ['No smoking allowed', 'Smoking allowed outdoors only', 'Smoking allowed in designated areas', 'No restrictions']",
+                "amenities": "Array of Strings: ['Swimming Pool', 'Gym', 'Security (24/7)', 'Garden', 'Playground', 'Elevator', 'Generator', 'Clubhouse']",
+                "interiorFeatures": "Array of Strings: ['Air-conditioning', 'Built-in cabinets', 'Balcony', 'Kitchen appliances', 'Walk-in closet', 'Smart home system', 'Marble Floors', 'Floor-to-Ceiling Windows']",
+                "utilities": "Array of Strings: ['Water', 'Electricity', 'Internet readiness', 'Gas line', 'Sewage system']",
+                "ownershipStatus": "Enum: ['Free and Clear', 'Mortgaged', 'Under Foreclosure', 'Bank Owned', 'Government Owned', 'Private Owned']",
+                "terms": "Array of Strings (e.g., 'No smoking allowed', 'Minimum 1 year lease')",
+                "agentName": "String",
+                "developerName": "String"
+            }
+        }
+
+        ### RULES
+        1. If the user asks to find, search, or look for a property, CALL the `search_properties` function with the relevant filters.
+        2. Do NOT hallucinate listings. If you are not calling the function, only discuss Vista features or general real estate advice.
+        3. If the user mentions "good internet", map it to "utilities" containing "Internet readiness".
+        4. If the user mentions "cheap" or "affordable", ask for a specific price range before searching.
+        5. Be concise.
         """
 
         current_user_message = {"role": "user", "parts": [{"text": user_query}]}
         full_contents = history + [current_user_message]
 
         try:
+            # 3. Call Gemini with Tools
             response = self.client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=full_contents,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    temperature=0.1
+                    temperature=0.1,
+                    tools=[search_tool],
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        disable=True 
+                    )
                 )
             )
+
+            # 4. Handle Function Calls
+            if response.function_calls:
+                function_call = response.function_calls[0]
+                if function_call.name == "search_properties":
+                    filters = function_call.args
+                    print(f"🔍 AI extracted filters: {filters}")
+                    
+                    # --- REAL DB LOOKUP ---
+                    # Call the repository directly using the filters from AI
+                    properties_found = self.repo.search_properties(filters)
+                    
+                    if not properties_found:
+                        return "I searched for properties matching those criteria, but I couldn't find any listings right now."
+
+                    # Return structured data for the Controller to handle
+                    return {
+                        "type": "search_results",
+                        "data": properties_found,
+                        "text": f"I found {len(properties_found)} properties that match your criteria:"
+                    }
+
             return response.text
+
         except Exception as e:
             print(f"Chat Error: {str(e)}")
             return "I'm having trouble connecting right now. Let's try again in a moment."
