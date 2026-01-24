@@ -21,11 +21,15 @@ app = Flask(__name__)
 
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
-# Enable CORS with specific origins for development
-CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"], supports_credentials=True,
-         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
-         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         expose_headers=["Content-Type", "Content-Length"])
+# Enable CORS for all origins (works for deployed backends)
+CORS(app, 
+     resources={r"/api/*": {
+         "origins": "*",
+         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+         "expose_headers": ["Content-Type", "Content-Length"],
+         "supports_credentials": False
+     }})
 
 # Register the Blueprints
 app.register_blueprint(virtual_staging_bp)
