@@ -35,9 +35,9 @@ class FurnitureThemeEnum(str, Enum):
 class StagingParameters(BaseModel):
     """Parameters for customizing virtual staging"""
     role: str = Field(default="professional interior designer", description="Role description for the AI model")
-    style: str = Field(default="modern", description="Staging style (e.g., modern, contemporary, minimalist)")
-    color_scheme: Optional[str] = Field(default=None, description="Preferred color scheme")
+    style: Optional[str] = Field(default=None, description="Staging style (e.g., modern, contemporary, minimalist)")
     furniture_style: Optional[str] = Field(default=None, description="Furniture style preference")
+    color_scheme: Optional[str] = Field(default=None, description="Preferred color scheme")
     specific_requests: Optional[str] = Field(default=None, description="Additional customization requests")
 
 
@@ -58,8 +58,10 @@ class VirtualStaging(BaseModel):
     
     session_id: str = Field(..., description="Unique identifier for the virtual staging session")
     property_id: str = Field(..., description="Identifier for the associated property")
-    user_id: str = Field(..., description="Identifier for the user requesting the virtual staging")
-    room_name: str = Field(..., description="Name/identifier of the room being staged")
+    
+    # Panoramic images from property
+    panoramic_images: List[str] = Field(default_factory=list, description="List of panoramic image URLs from the property (updated when saved)")
+    current_image_index: int = Field(default=0, description="Index of the currently working panoramic image")
     
     # Chat history reference
     chat_history_id: Optional[str] = Field(default=None, description="Reference to the persistent virtual staging chat history")
@@ -100,8 +102,8 @@ class VirtualStaging(BaseModel):
         data = {
             'session_id': self.session_id,
             'property_id': self.property_id,
-            'user_id': self.user_id,
-            'room_name': self.room_name,
+            'panoramic_images': self.panoramic_images,
+            'current_image_index': self.current_image_index,
             'chat_history_id': self.chat_history_id,
             'orignal_image_key': self.orignal_image_key,
             'original_image_url': self.original_image_url,

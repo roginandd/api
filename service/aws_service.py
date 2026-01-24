@@ -32,12 +32,15 @@ class AWSService:
             # Build the S3 key (path)
             s3_key = f"{folder}/{new_filename}" if folder else new_filename
             
-            # Upload to S3
+            # Upload to S3 with Content-Disposition set to inline (view instead of download)
             AWSConfig.s3.upload_fileobj(
                 file,
                 AWSConfig.AWS_S3_BUCKET,
                 s3_key,
-                ExtraArgs={"ContentType": file.content_type}
+                ExtraArgs={
+                    "ContentType": file.content_type,
+                    "ContentDisposition": "inline"
+                }
             )
             
             # Generate the file URL
@@ -81,12 +84,15 @@ class AWSService:
             # Convert bytes to BytesIO for upload
             file_obj = BytesIO(image_bytes)
             
-            # Upload to S3
+            # Upload to S3 with Content-Disposition set to inline (view instead of download)
             AWSConfig.s3.upload_fileobj(
                 file_obj,
                 AWSConfig.AWS_S3_BUCKET,
                 s3_key,
-                ExtraArgs={"ContentType": content_type}
+                ExtraArgs={
+                    "ContentType": content_type,
+                    "ContentDisposition": "inline"
+                }
             )
             
             # Generate the file URL

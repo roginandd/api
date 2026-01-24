@@ -68,55 +68,62 @@ COLOR_PALETTES: Dict[str, Dict[str, str]] = {
 
 
 def build_staging_prompt(role: str,
-                        style: str,
-                        furniture_theme: str,
+                        style: Optional[str] = None,
+                        furniture_style: Optional[str] = None,
                         color_scheme: Optional[str] = None,
                         specific_request: Optional[str] = None) -> str:
     """
-    Build a comprehensive staging prompt with all parameters
+    Build a comprehensive staging prompt with optional theme parameters
     
     Args:
         role: Professional role description
-        style: Style from StyleEnum
-        furniture_theme: Furniture theme from FurnitureThemeEnum
-        color_scheme: Hex color (e.g., #FF5733)
+        style: Optional staging style
+        furniture_style: Optional furniture style
+        color_scheme: Optional color scheme
         specific_request: Custom user request
     
     Returns:
         Fully engineered prompt for Gemini
     """
-    style_desc = STYLE_DESCRIPTIONS.get(style, style)
-    furniture_desc = FURNITURE_DESCRIPTIONS.get(furniture_theme, furniture_theme)
+    style_desc = STYLE_DESCRIPTIONS.get(style, style) if style else None
+    furniture_desc = FURNITURE_DESCRIPTIONS.get(furniture_style, furniture_style) if furniture_style else None
     
-    color_info = color_scheme or "neutral with warm accents"
-    if color_scheme and color_scheme in COLOR_PALETTES:
-        palette_info = COLOR_PALETTES[color_scheme]
-        color_info = f"{palette_info['name']} ({color_scheme}) - {palette_info['description']}"
+    color_info = None
+    if color_scheme:
+        if color_scheme in COLOR_PALETTES:
+            palette_info = COLOR_PALETTES[color_scheme]
+            color_info = f"{palette_info['name']} ({color_scheme}) - {palette_info['description']}"
+        else:
+            color_info = color_scheme
     
     # Build the enhanced prompt
-    prompt = BASE_SYSTEM_PROMPT.format(
-        role=role,
-        style=f"{style.upper()}: {style_desc}",
-        furniture_theme=f"{furniture_theme.upper()}: {furniture_desc}",
-        color_scheme=color_info,
-        specific_request=specific_request or "No additional specific requests"
-    )
+    styling_section = ""
+    if style_desc or furniture_desc or color_info:
+        styling_section = "\nSTYLING PARAMETERS:"
+        if style:
+            styling_section += f"\n- Style: {style.upper()}: {style_desc}"
+        if furniture_style:
+            styling_section += f"\n- Furniture Theme: {furniture_style.upper()}: {furniture_desc}"
+        if color_info:
+            styling_section += f"\n- Color Scheme: {color_info}"
     
-    # Append additional context
-    additional_context = f"""
-DETAILED STAGING INSTRUCTIONS:
-1. Apply the {style} aesthetic throughout the room
-2. Incorporate {furniture_theme} style furniture pieces
-3. Use {color_info} as the primary color palette
-4. Ensure lighting complements the staging parameters
-5. Add appropriate accessories and decor for the {style} style
-6. Maintain room proportions and architectural features
-"""
+    prompt = f"""You are an expert {role}.
+
+Your task is to transform an interior room image using AI-based virtual staging.
+
+CRITICAL INSTRUCTIONS:
+1. Analyze the uploaded image carefully
+2. Apply professional staging to transform the space
+3. Generate a detailed, realistic virtual staged version of the room
+4. Maintain architectural integrity while applying aesthetic changes
+5. Return ONLY the generated image - no text descriptions
+{styling_section}
+
+Additional Request: {specific_request or "No additional specific requests"}
+
+Generate the staged interior that incorporates these parameters seamlessly."""
     
-    if specific_request:
-        additional_context += f"\n7. USER'S SPECIFIC REQUEST: {specific_request}\n   Prioritize incorporating this request while maintaining design coherence."
-    
-    return prompt + additional_context
+    return prompt
 
 
 # Optional: Chat history context builder for refinements

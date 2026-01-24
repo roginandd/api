@@ -189,11 +189,8 @@ def get_properties_in_seller_side():
 def get_properties():
     """Get all properties or properties for a user"""
     try:
-        user_id = request.args.get('user_id')
-        if user_id:
-            properties = property_service.get_properties_by_user(user_id)
-        else:
-            properties = property_service.get_all_properties()
+
+        properties = property_service.get_all_properties()
 
         properties_list = []
         for prop_id, prop in properties:

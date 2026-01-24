@@ -12,9 +12,14 @@ import os
 import base64
 from pathlib import Path
 from PIL import Image
+from threading import Lock
 
 # Configuration
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+# Lock to ensure only one image generation request at a time per session
+_generation_locks: Dict[str, Lock] = {}
+_generation_locks_lock = Lock()
 
 # Note: All uploads are now handled via AWS S3 for deployment compatibility
 
@@ -72,6 +77,16 @@ def get_image_mime_type(image_path: str) -> str:
     return mime_types.get(ext, 'image/jpeg')
 
 
+def get_session_lock(session_id: str) -> Lock:
+    """Get or create a lock for a session to prevent concurrent generation requests"""
+    global _generation_locks, _generation_locks_lock
+    
+    with _generation_locks_lock:
+        if session_id not in _generation_locks:
+            _generation_locks[session_id] = Lock()
+        return _generation_locks[session_id]
+
+
 # Create blueprint
 virtual_staging_bp = Blueprint('virtual_staging', __name__, url_prefix='/api/virtual-staging')
 
@@ -87,34 +102,20 @@ def generate_session_id() -> str:
 @virtual_staging_bp.route('/session', methods=['POST'])
 def create_session() -> Tuple[Dict[str, Any], int]:
     """
-    Create a new virtual staging session using a panoramic image from the property
+    Create a new virtual staging session for a property
     
     Form data (multipart/form-data):
     {
-        "property_id": str (required),
-        "user_id": str (required),
-        "room_name": str (required),
-        "image_index": int (optional - index of panoramic image to use, defaults to 0),
-        "style": str (StyleEnum, required),
-        "furniture_theme": str (FurnitureThemeEnum, required),
-        "color_scheme": str (hex color, optional),
-        "specific_request": str (optional)
+        "property_id": str (required)
     }
     """
     try:
         # Get form data
         property_id = request.form.get('property_id', type=str)
-        user_id = request.form.get('user_id', type=str)
-        room_name = request.form.get('room_name', type=str)
-        image_index = request.form.get('image_index', type=int, default=0)
-        style = request.form.get('style', type=str)
-        furniture_theme = request.form.get('furniture_theme', type=str)
-        color_scheme = request.form.get('color_scheme', type=str)
-        specific_request = request.form.get('specific_request', type=str)
         
         # Validate required fields
-        if not all([property_id, user_id, room_name, style, furniture_theme]):
-            return {'error': 'Missing required fields: property_id, user_id, room_name, style, furniture_theme'}, 400
+        if not property_id:
+            return {'error': 'Missing required field: property_id'}, 400
         
         # Get property to access panoramic images
         from service.property_service import PropertyService
@@ -128,39 +129,24 @@ def create_session() -> Tuple[Dict[str, Any], int]:
         if not panoramic_images:
             return {'error': 'No panoramic images found for this property'}, 400
         
-        # Validate image_index
-        if image_index < 0 or image_index >= len(panoramic_images):
-            return {'error': f'Invalid image_index. Available panoramic images: 0-{len(panoramic_images)-1}'}, 400
-        
-        # Get selected panoramic image
-        selected_image = panoramic_images[image_index]
+        # Extract panoramic image URLs
+        panoramic_image_urls = [img.url for img in panoramic_images]
+        selected_image = panoramic_images[0]
         
         # Generate session_id
         session_id = generate_session_id()
         
-        # Validate enums
-        try:
-            style_enum = StyleEnum(style)
-            furniture_enum = FurnitureThemeEnum(furniture_theme)
-        except ValueError as e:
-            return {'error': f'Invalid enum value: {str(e)}'}, 400
-        
-        # Create staging parameters
+        # Create staging parameters (use defaults for initial session)
         staging_params = StagingParameters(
-            role=request.form.get('role', 'professional interior designer'),
-            style=style_enum,
-            furniture_theme=furniture_enum,
-            color_scheme=color_scheme,
-            specific_request=specific_request
+            role=request.form.get('role', 'professional interior designer')
         )
         
-        # Create session with selected panoramic image URL
+        # Create session with all panoramic images
         staging = vs_service.create_staging_session_from_s3(
             session_id=session_id,
             property_id=property_id,
-            user_id=user_id,
-            room_name=room_name,
             original_image_url=selected_image.url,
+            panoramic_images=panoramic_image_urls,
             staging_parameters=staging_params
         )
         
@@ -170,12 +156,8 @@ def create_session() -> Tuple[Dict[str, Any], int]:
         return {
             'message': 'Session created successfully',
             'session_id': session_id,
-            'selected_image': {
-                'url': selected_image.url,
-                'filename': selected_image.filename,
-                'index': image_index
-            },
-            'available_panoramic_images': len(panoramic_images),
+            'property_id': property_id,
+            'panoramic_images_count': len(panoramic_images),
             'staging': staging.to_dict()
         }, 201
     
@@ -201,12 +183,18 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         "user_message": str (optional - user's request for chat history)
     }
     """
+    # Get session_id first to acquire lock
+    session_id = request.form.get('session_id', type=str)
+    if not session_id:
+        return {'error': 'Missing required field: session_id'}, 400
+    
+    # Acquire lock for this session - only one generation at a time
+    session_lock = get_session_lock(session_id)
+    
+    if not session_lock.acquire(blocking=False):
+        return {'error': f'Another image generation is already in progress for session {session_id}. Please wait and try again.'}, 429
+    
     try:
-        # Get session_id first
-        session_id = request.form.get('session_id', type=str)
-        if not session_id:
-            return {'error': 'Missing required field: session_id'}, 400
-        
         # Get custom_prompt (required)
         custom_prompt = request.form.get('custom_prompt', type=str)
         if not custom_prompt or custom_prompt.strip() == '':
@@ -215,8 +203,10 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         # Get optional user message for chat history
         user_message = request.form.get('user_message', type=str)
         
-        # Get image_index for selecting panoramic image
+        # Get image_index for selecting panoramic image (required)
         image_index = request.form.get('image_index', type=int)
+        if image_index is None:
+            return {'error': 'Missing required field: image_index'}, 400
         
         # Get the session to access property
         session = vs_service.get_session(session_id)
@@ -236,19 +226,9 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
             return {'error': 'No panoramic images found for this property'}, 400
         
         # Determine which image to use
-        if image_index is not None:
-            # Validate image_index
-            if image_index < 0 or image_index >= len(panoramic_images):
-                return {'error': f'Invalid image_index. Available panoramic images: 0-{len(panoramic_images)-1}'}, 400
-            selected_image = panoramic_images[image_index]
-        else:
-            # Use the session's original image if it's panoramic
-            session_image_url = session.original_image_url
-            matching_images = [img for img in panoramic_images if img.url == session_image_url]
-            if not matching_images:
-                return {'error': 'Session original image is not panoramic. Please specify image_index.'}, 400
-            selected_image = matching_images[0]
-            image_index = panoramic_images.index(selected_image)
+        if image_index < 0 or image_index >= len(panoramic_images):
+            return {'error': f'Invalid image_index. Available panoramic images: 0-{len(panoramic_images)-1}'}, 400
+        selected_image = panoramic_images[image_index]
         
         # Get form data
         style = request.form.get('style', type=str)
@@ -266,40 +246,23 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
                 if not mask_image_path:
                     return {'error': 'Invalid mask image format. Allowed: png, jpg, jpeg, gif, webp'}, 400
         
-        # Validate enums if provided
-        style_enum = None
-        furniture_enum = None
-        if style:
-            try:
-                style_enum = StyleEnum(style)
-            except ValueError as e:
-                return {'error': f'Invalid style enum value: {str(e)}'}, 400
-        
-        if furniture_theme:
-            try:
-                furniture_enum = FurnitureThemeEnum(furniture_theme)
-            except ValueError as e:
-                return {'error': f'Invalid furniture_theme enum value: {str(e)}'}, 400
-        
-        # Create staging parameters
-        staging_params = None
-        if style_enum and furniture_enum:
-            staging_params = StagingParameters(
-                role=request.form.get('role', 'professional interior designer'),
-                style=style_enum,
-                furniture_theme=furniture_enum,
-                color_scheme=color_scheme,
-                specific_request=specific_request
-            )
+        # Create staging parameters with optional theme
+        staging_params = StagingParameters(
+            role=request.form.get('role', 'professional interior designer'),
+            style=style,  # Can be None
+            furniture_style=furniture_theme,  # Can be None
+            color_scheme=color_scheme,  # Can be None
+            specific_request=specific_request  # Can be None
+        )
         
         # Generate staging with selected panoramic image
         response = vs_service.generate_staging(
             session_id=session_id,
+            image_index=image_index,
             staging_parameters=staging_params,
             custom_prompt=custom_prompt,
             mask_image_url=mask_image_path,
-            user_message=user_message,
-            image_path_override=selected_image.url
+            user_message=user_message
         )
         
         if not response:
@@ -322,6 +285,9 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
     
     except Exception as e:
         return {'error': f'Error generating staging: {str(e)}'}, 500
+    finally:
+        # Always release the lock when done
+        session_lock.release()
 
 
 @virtual_staging_bp.route('/session/<session_id>', methods=['GET'])
@@ -381,23 +347,16 @@ def refine_staging() -> Tuple[Dict[str, Any], int]:
         user_message = request.form.get('user_message', type=str)
         
         # Validate required fields
-        if not all([session_id, style, furniture_theme]):
-            return {'error': 'Missing required fields: session_id, style, furniture_theme'}, 400
+        if not session_id:
+            return {'error': 'Missing required field: session_id'}, 400
         
-        # Validate enums
-        try:
-            style_enum = StyleEnum(style)
-            furniture_enum = FurnitureThemeEnum(furniture_theme)
-        except ValueError as e:
-            return {'error': f'Invalid enum value: {str(e)}'}, 400
-        
-        # Create new staging parameters
+        # Create new staging parameters with optional theme
         new_params = StagingParameters(
             role=request.form.get('role', 'professional interior designer'),
-            style=style_enum,
-            furniture_theme=furniture_enum,
-            color_scheme=color_scheme,
-            specific_request=specific_request
+            style=style,  # Can be None
+            furniture_style=furniture_theme,  # Can be None
+            color_scheme=color_scheme,  # Can be None
+            specific_request=specific_request  # Can be None
         )
         
         # Refine staging with optional user message for chat history

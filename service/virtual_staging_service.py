@@ -36,9 +36,8 @@ class VirtualStagingService:
     def create_staging_session_from_s3(self,
                               session_id: str,
                               property_id: str,
-                              user_id: str,
-                              room_name: str,
                               original_image_url: str,
+                              panoramic_images: List[str],
                               staging_parameters: StagingParameters) -> Optional[VirtualStaging]:
         """
         Create a new virtual staging session with S3 image URL
@@ -46,15 +45,14 @@ class VirtualStagingService:
         Args:
             session_id: Unique session identifier
             property_id: Property ID
-            user_id: User ID
-            room_name: Room name being staged
-            original_image_url: S3 URL to the original image
+            original_image_url: S3 URL to the original image (first panoramic)
+            panoramic_images: List of all panoramic image URLs from the property
             staging_parameters: Staging parameters for customization
             
         Returns:
             Created VirtualStaging session or None if failed
         """
-        if not self._validate_staging(session_id, property_id, user_id, room_name):
+        if not self._validate_staging(session_id, property_id):
             return None
         
         try:
@@ -76,7 +74,7 @@ class VirtualStagingService:
                 history_id=chat_history_id,
                 session_id=session_id,
                 property_id=property_id,
-                user_id=user_id
+                user_id="default"
             )
             
             if not chat_history:
@@ -89,8 +87,8 @@ class VirtualStagingService:
             staging = VirtualStaging(
                 session_id=session_id,
                 property_id=property_id,
-                user_id=user_id,
-                room_name=room_name,
+                panoramic_images=panoramic_images,
+                current_image_index=0,
                 chat_history_id=chat_history_id,
                 orignal_image_key=s3_key,  # S3 key
                 original_image_url=original_image_url,  # S3 URL
@@ -130,6 +128,7 @@ class VirtualStagingService:
     
     def generate_staging(self,
                         session_id: str,
+                        image_index: int = 0,
                         staging_parameters: Optional[StagingParameters] = None,
                         custom_prompt: Optional[str] = None,
                         mask_image_url: Optional[str] = None,
@@ -137,10 +136,11 @@ class VirtualStagingService:
                         image_path_override: Optional[str] = None) -> Optional[VirtualStagingResponse]:
         """
         Generate virtual staging with Gemini.
-        Uses the provided image_path_override or falls back to session's current/original image.
+        Uses the panoramic image at the specified index.
         
         Args:
             session_id: Session ID
+            image_index: Index of panoramic image to generate on
             staging_parameters: Staging parameters (optional, uses session defaults if not provided)
             custom_prompt: Custom prompt for Gemini (optional)
             mask_image_url: Optional mask image URL for specific area editing
@@ -156,11 +156,17 @@ class VirtualStagingService:
                 print(f"Session {session_id} not found")
                 return None
             
-            # Determine which image to use: override, current, or original
-            # Priority: image_path_override > session.current_image_url > session.original_image_url
-            image_url = image_path_override
-            if not image_url:
-                image_url = session.current_image_url or session.original_image_url
+            # Determine which image to use based on image_index
+            # Validate image_index
+            if image_index < 0 or image_index >= len(session.panoramic_images):
+                print(f"Error: Invalid image_index {image_index}. Available: 0-{len(session.panoramic_images)-1}")
+                return None
+            
+            # Get the current panoramic image at this index (which may have been updated from previous generations)
+            image_url = session.panoramic_images[image_index]
+            
+            # Update current index being worked on
+            session.current_image_index = image_index
             
             # Validate and prepare image for processing
             if not image_url:
@@ -193,7 +199,7 @@ class VirtualStagingService:
                 base_prompt = build_staging_prompt(
                     role=params.role,
                     style=params.style,
-                    furniture_theme=params.furniture_style or "modern",
+                    furniture_style=params.furniture_style,
                     color_scheme=params.color_scheme,
                     specific_request=params.specific_requests
                 )
@@ -209,7 +215,8 @@ class VirtualStagingService:
                     prompt = base_prompt
             else:
                 return None
-            
+
+            print(F"PROMPT GENERATED: {prompt}...")
             # Print the full prompt for debugging
             print(f"\n[STAGING] ========== FULL PROMPT FOR SESSION {session_id} ==========")
             print(f"{prompt}")
@@ -287,12 +294,7 @@ class VirtualStagingService:
             metadata = StagingMetadata(
                 session_id=session_id,
                 property_id=session.property_id,
-                user_id=session.user_id,
-                room_name=session.room_name,
                 version=session.version,
-                style=params.style if params else "custom",
-                furniture_theme=params.furniture_style or "modern" if params else "modern",
-                color_scheme=params.color_scheme if params else None,
                 specific_request=params.specific_requests if params else None,
                 created_at=session.created_at,
                 updated_at=datetime.utcnow(),
@@ -370,6 +372,11 @@ class VirtualStagingService:
             session.version = new_version
             session.last_saved_version = new_version
             session.updated_at = now
+            
+            # Update the panoramic image at current index with the newly saved URL
+            if session.current_image_index < len(session.panoramic_images):
+                session.panoramic_images[session.current_image_index] = image_version.image_url
+                print(f"[SAVE] Updated panoramic_images[{session.current_image_index}] with: {image_version.image_url}")
             
             # Move from working to saved in generation history
             if session.generation_history:
@@ -560,8 +567,6 @@ class VirtualStagingService:
             response = StagingSessionResponse(
                 session_id=session.session_id,
                 property_id=session.property_id,
-                user_id=session.user_id,
-                room_name=session.room_name,
                 original_image_url=session.original_image_url,
                 current_image_url=session.current_image_url,
                 last_saved_image_url=last_saved_url,
@@ -643,7 +648,7 @@ class VirtualStagingService:
             refinement_prompt = build_staging_prompt(
                 role=new_staging_parameters.role,
                 style=new_staging_parameters.style,
-                furniture_theme=new_staging_parameters.furniture_style or "modern",
+                furniture_style=new_staging_parameters.furniture_style,
                 color_scheme=new_staging_parameters.color_scheme,
                 specific_request=new_staging_parameters.specific_requests
             )
@@ -777,14 +782,11 @@ class VirtualStagingService:
             print(f"Error deleting session: {str(e)}")
             return False
     
-    def _validate_staging(self, session_id: str, property_id: str, user_id: str,
-                         room_name: str) -> bool:
+    def _validate_staging(self, session_id: str, property_id: str) -> bool:
         """Validate staging fields"""
         return (
             session_id and session_id.strip() and
-            property_id and property_id.strip() and
-            user_id and user_id.strip() and
-            room_name and room_name.strip()
+            property_id and property_id.strip()
         )
 
 
