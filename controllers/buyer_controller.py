@@ -51,7 +51,8 @@ def _convert_to_property_details_payload(property_id: str, property_data: Dict[s
             images.append(PropertyImagePayload(
                 id=img.get('id', ''),
                 url=img.get('url', ''),
-                imageType=img.get('imageType', 'regular')
+                imageType=img.get('imageType', 'regular'),
+                label=img.get('label', '')
             ))
 
     return PropertyDetailsPayload(

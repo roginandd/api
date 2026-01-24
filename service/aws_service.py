@@ -290,7 +290,7 @@ class AWSService:
         return '/'.join(url_parts[1:])
 
     @staticmethod
-    def upload_property_image(file, property_id: str, image_type: str) -> dict:
+    def upload_property_image(file, property_id: str, image_type: str, label: str = None) -> dict:
         """
         Upload a property image to S3 with thumbnail generation.
         
@@ -371,7 +371,8 @@ class AWSService:
                 "url": file_url,
                 "thumbnailUrl": thumbnail_url,
                 "filename": filename,
-                "imageType": image_type
+                "imageType": image_type,
+                "label": label
             }
             
         except Exception as e:

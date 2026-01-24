@@ -22,7 +22,7 @@ class PropertyService:
         self.repository = PropertyRepository()
         self.aws_service = AWSService()
 
-    def create_property(self, data: Dict[str, Any], user_id: str, files: Dict[str, Any] = None) -> Tuple[str, Property, List[PropertyImage]]:
+    def create_property(self, data: Dict[str, Any], user_id: str, files: Dict[str, Any] = None, labels: Dict[str, Any] = None) -> Tuple[str, Property, List[PropertyImage]]:
         """
         Create a new property from form data
 
@@ -47,7 +47,7 @@ class PropertyService:
         images = []
         main_image = None
         if files:
-            images = self._handle_image_uploads(files, property_id)
+            images = self._handle_image_uploads(files, property_id, labels)
             # Handle main image separately if provided
             if 'image' in files and files['image']:
                 main_image_result = self.aws_service.upload_property_image(files['image'][0], property_id, 'regular')
@@ -82,7 +82,7 @@ class PropertyService:
         """Get all properties"""
         return self.repository.get_all_properties()
 
-    def update_property(self, property_id: str, data: Dict[str, Any], user_id: str, files: Dict[str, Any] = None) -> Property:
+    def update_property(self, property_id: str, data: Dict[str, Any], user_id: str, files: Dict[str, Any] = None, labels: Dict[str, Any] = None) -> Property:
         """
         Update an existing property
 
@@ -105,7 +105,7 @@ class PropertyService:
 
         # Handle image uploads if files provided
         if files:
-            images = self._handle_image_uploads(files, property_id)
+            images = self._handle_image_uploads(files, property_id, labels)
             # Handle main image update if provided
             if 'image' in files and files['image']:
                 main_image_result = self.aws_service.upload_property_image(files['image'][0], property_id, 'regular')
@@ -344,22 +344,26 @@ class PropertyService:
 
         return property_data
 
-    def _handle_image_uploads(self, files: Dict[str, Any], property_id: str) -> List[PropertyImage]:
+    def _handle_image_uploads(self, files: Dict[str, Any], property_id: str, labels: Dict[str, Any] = None) -> List[PropertyImage]:
         """Handle image uploads to S3"""
         images = []
 
         # Handle regular images
         if 'regularImages' in files:
-            for file in files['regularImages']:
-                result = self.aws_service.upload_property_image(file, property_id, 'regular')
+            regular_labels = labels.get('regularImages', []) if labels else []
+            for i, file in enumerate(files['regularImages']):
+                label = regular_labels[i] if i < len(regular_labels) and regular_labels[i] else None
+                result = self.aws_service.upload_property_image(file, property_id, 'regular', label)
                 if not result.get('success', True):
                     raise ValidationError(f"Failed to upload regular image: {result.get('error', 'Unknown error')}")
                 images.append(PropertyImage(**result))
 
         # Handle panoramic images
         if 'panoramicImages' in files:
-            for file in files['panoramicImages']:
-                result = self.aws_service.upload_property_image(file, property_id, 'panoramic')
+            panoramic_labels = labels.get('panoramicImages', []) if labels else []
+            for i, file in enumerate(files['panoramicImages']):
+                label = panoramic_labels[i] if i < len(panoramic_labels) and panoramic_labels[i] else None
+                result = self.aws_service.upload_property_image(file, property_id, 'panoramic', label)
                 if not result.get('success', True):
                     raise ValidationError(f"Failed to upload panoramic image: {result.get('error', 'Unknown error')}")
                 images.append(PropertyImage(**result))

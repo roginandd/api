@@ -22,12 +22,33 @@ def create_property():
         # Get form data
         data = request.form.to_dict()
 
-        # Get uploaded files
+        # Get uploaded files and their labels
         files = {}
+        labels = {}
         if 'regularImages' in request.files:
             files['regularImages'] = request.files.getlist('regularImages')
+            # Get labels for regular images
+            if 'regularImageLabels' in data:
+                try:
+                    import json
+                    labels['regularImages'] = json.loads(data['regularImageLabels'])
+                except:
+                    labels['regularImages'] = []
+            else:
+                labels['regularImages'] = []
+                
         if 'panoramicImages' in request.files:
             files['panoramicImages'] = request.files.getlist('panoramicImages')
+            # Get labels for panoramic images
+            if 'panoramicImageLabels' in data:
+                try:
+                    import json
+                    labels['panoramicImages'] = json.loads(data['panoramicImageLabels'])
+                except:
+                    labels['panoramicImages'] = []
+            else:
+                labels['panoramicImages'] = []
+                
         if 'image' in request.files:
             files['image'] = request.files.getlist('image')
 
@@ -36,7 +57,7 @@ def create_property():
         user_id = data.get('user_id', 'user_123456')
 
         # Create property
-        property_id, property_obj, images = property_service.create_property(data, user_id, files)
+        property_id, property_obj, images = property_service.create_property(data, user_id, files, labels)
 
         response = {
             'success': True,
@@ -203,17 +224,39 @@ def update_property(property_id: str):
         # Get form data (for file uploads) or JSON data
         if request.content_type and 'multipart/form-data' in request.content_type:
             data = request.form.to_dict()
-            # Get uploaded files
+            # Get uploaded files and their labels
             files = {}
+            labels = {}
             if 'regularImages' in request.files:
                 files['regularImages'] = request.files.getlist('regularImages')
+                # Get labels for regular images
+                if 'regularImageLabels' in data:
+                    try:
+                        import json
+                        labels['regularImages'] = json.loads(data['regularImageLabels'])
+                    except:
+                        labels['regularImages'] = []
+                else:
+                    labels['regularImages'] = []
+                    
             if 'panoramicImages' in request.files:
                 files['panoramicImages'] = request.files.getlist('panoramicImages')
+                # Get labels for panoramic images
+                if 'panoramicImageLabels' in data:
+                    try:
+                        import json
+                        labels['panoramicImages'] = json.loads(data['panoramicImageLabels'])
+                    except:
+                        labels['panoramicImages'] = []
+                else:
+                    labels['panoramicImages'] = []
+                    
             if 'image' in request.files:
                 files['image'] = request.files.getlist('image')
         else:
             data = request.get_json()
             files = None
+            labels = None
 
         if not data:
             return jsonify({
@@ -227,7 +270,7 @@ def update_property(property_id: str):
         # TODO: Get user_id from authentication
         user_id = data.get('user_id', 'user_123456')
 
-        updated_property = property_service.update_property(property_id, data, user_id, files)
+        updated_property = property_service.update_property(property_id, data, user_id, files, labels)
 
         return jsonify({
             'success': True,
@@ -265,17 +308,39 @@ def patch_property(property_id: str):
         # Get form data (for file uploads) or JSON data
         if request.content_type and 'multipart/form-data' in request.content_type:
             data = request.form.to_dict()
-            # Get uploaded files
+            # Get uploaded files and their labels
             files = {}
+            labels = {}
             if 'regularImages' in request.files:
                 files['regularImages'] = request.files.getlist('regularImages')
+                # Get labels for regular images
+                if 'regularImageLabels' in data:
+                    try:
+                        import json
+                        labels['regularImages'] = json.loads(data['regularImageLabels'])
+                    except:
+                        labels['regularImages'] = []
+                else:
+                    labels['regularImages'] = []
+                    
             if 'panoramicImages' in request.files:
                 files['panoramicImages'] = request.files.getlist('panoramicImages')
+                # Get labels for panoramic images
+                if 'panoramicImageLabels' in data:
+                    try:
+                        import json
+                        labels['panoramicImages'] = json.loads(data['panoramicImageLabels'])
+                    except:
+                        labels['panoramicImages'] = []
+                else:
+                    labels['panoramicImages'] = []
+                    
             if 'image' in request.files:
                 files['image'] = request.files.getlist('image')
         else:
             data = request.get_json()
             files = None
+            labels = None
 
         if not data and not files:
             return jsonify({
@@ -289,7 +354,7 @@ def patch_property(property_id: str):
         # TODO: Get user_id from authentication
         user_id = data.get('user_id', 'user_123456') if data else 'user_123456'
 
-        updated_property = property_service.update_property(property_id, data or {}, user_id, files)
+        updated_property = property_service.update_property(property_id, data or {}, user_id, files, labels)
 
         return jsonify({
             'success': True,

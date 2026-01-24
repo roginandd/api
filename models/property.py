@@ -1,6 +1,28 @@
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from enum import Enum
+
+
+class RoomType(str, Enum):
+    """Enum for property room/area types used for image labeling"""
+    LIVING_ROOM = "Living Room"
+    KITCHEN = "Kitchen"
+    MASTER_BEDROOM = "Master Bedroom"
+    BEDROOM = "Bedroom"
+    BATHROOM = "Bathroom"
+    DINING_ROOM = "Dining Room"
+    HOME_OFFICE = "Home Office"
+    BALCONY_TERRACE = "Balcony/Terrace"
+    GARDEN_YARD = "Garden/Yard"
+    GARAGE = "Garage"
+    HALLWAY = "Hallway"
+    STAIRCASE = "Staircase"
+    BASEMENT = "Basement"
+    ATTIC = "Attic"
+    LAUNDRY_ROOM = "Laundry Room"
+    STORAGE_ROOM = "Storage Room"
+    OTHER = "Other"
 
 
 class NearbyEstablishment(BaseModel):
@@ -14,6 +36,7 @@ class PropertyImage(BaseModel):
     thumbnailUrl: Optional[str] = None
     filename: str
     imageType: str  # "regular" or "panoramic"
+    label: Optional[RoomType] = Field(None, description="Room/area type label for the image")
 
 
 class Property(BaseModel):
@@ -166,6 +189,7 @@ class PropertyImagePayload(BaseModel):
     id: str
     url: str
     imageType: str  # "regular" | "panoramic"
+    label: Optional[RoomType] = None
 
 
 class PropertyCardPayload(BaseModel):
