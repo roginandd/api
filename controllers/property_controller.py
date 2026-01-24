@@ -325,9 +325,7 @@ def delete_property(property_id: str):
     """Delete a property"""
     try:
         # TODO: Get user_id from authentication
-        user_id = request.args.get('user_id', 'user_123456')
-
-        success = property_service.delete_property(property_id, user_id)
+        success = property_service.delete_property(property_id)
 
         if success:
             return jsonify({

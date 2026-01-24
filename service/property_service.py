@@ -146,7 +146,7 @@ class PropertyService:
             property_model.propertyId = property_id
         return property_model
 
-    def delete_property(self, property_id: str, user_id: str) -> bool:
+    def delete_property(self, property_id: str) -> bool:
         """
         Delete a property
 
@@ -161,8 +161,6 @@ class PropertyService:
         if not property_model:
             raise ValidationError("Property not found")
 
-        if property_model.createdBy != user_id:
-            raise ValidationError("Unauthorized to delete this property")
 
         return self.repository.delete_property(property_id)
 
