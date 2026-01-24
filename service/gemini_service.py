@@ -527,7 +527,8 @@ If the request is vague (e.g., "make it blue"), you must infer the most sophisti
         2. Do NOT hallucinate listings. If you are not calling the function, only discuss Vista features or general real estate advice.
         3. If the user mentions "good internet", map it to "utilities" containing "Internet readiness".
         4. If the user mentions "cheap" or "affordable", ask for a specific price range before searching.
-        5. Be concise.
+        5. If the user looks for properties in a location, use the "keyword" filter for fuzzy matching. 
+        6. Be concise.
         """
 
         current_user_message = {"role": "user", "parts": [{"text": user_query}]}
