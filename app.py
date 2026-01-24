@@ -5,6 +5,7 @@ Flask application using Blueprint pattern for clean architecture
 from flask import Flask
 from flask_cors import CORS
 from datetime import datetime
+import os
 
 # Import the Blueprints from controllers
 from controllers.virtual_staging_controller import virtual_staging_bp
@@ -17,8 +18,28 @@ from controllers.mark_controller import mark_bp
 # Create Flask app
 app = Flask(__name__)
 
-# Enable CORS with specific origins for development
-CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"], supports_credentials=True)
+# Increase maximum file size for multipart uploads (50MB)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+
+# Enable CORS based on environment
+env = os.getenv('FLASK_ENV', 'development')
+if env == 'production':
+    # Production: Allow specific frontend origin
+    frontend_origins = os.getenv('ALLOWED_ORIGINS', 'https://vista-cspsits.vercel.app').split(',')
+    CORS(app, 
+         origins=frontend_origins,
+         supports_credentials=False,
+         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         expose_headers=["Content-Type", "Content-Length"])
+else:
+    # Development: Localhost origins
+    CORS(app,
+         origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"],
+         supports_credentials=True,
+         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         expose_headers=["Content-Type", "Content-Length"])
 
 # Register the Blueprints
 app.register_blueprint(virtual_staging_bp)
@@ -56,6 +77,18 @@ def not_found(error):
 @app.errorhandler(405)
 def method_not_allowed(error):
     return {'error': 'Method not allowed'}, 405
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return {
+        'success': False,
+        'error': {
+            'code': 'PAYLOAD_TOO_LARGE',
+            'message': 'Request payload exceeds 50MB limit. Please upload smaller images or compress them.',
+            'details': 'Images should be optimized before upload (recommend ~1-2MB per image)'
+        }
+    }, 413
 
 
 @app.errorhandler(500)
