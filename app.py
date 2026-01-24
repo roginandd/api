@@ -18,8 +18,7 @@ from controllers.mark_controller import mark_bp
 app = Flask(__name__)
 
 
-
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
 # Enable CORS for all origins (works for deployed backends)
 CORS(app, 
