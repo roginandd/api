@@ -15,16 +15,6 @@ property_service = PropertyService()
 
 def _convert_to_property_card_payload(property_id: str, property_data: Dict[str, Any]) -> PropertyCardPayload:
     """Convert full property data to lightweight card payload"""
-    # Get primary image URL
-    image_url = ""
-    if property_data.get('images') and len(property_data['images']) > 0:
-        # Use the first regular image or any image as fallback
-        for img in property_data['images']:
-            if img.get('imageType') == 'regular':
-                image_url = img.get('url', '')
-                break
-        if not image_url and property_data['images']:
-            image_url = property_data['images'][0].get('url', '')
 
     return PropertyCardPayload(
         propertyId=property_id,
