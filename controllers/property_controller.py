@@ -118,10 +118,9 @@ def get_properties_in_seller_side():
     try:
         # TODO: Get user_id from authentication
         # For now, use a placeholder
-        user_id = request.args.get('user_id', 'user_123456')
 
         # Get all properties for the seller
-        properties = property_service.get_properties_by_user(user_id)
+        properties = property_service.get_all_properties()
 
         properties_list = []
         for prop_id, prop in properties:

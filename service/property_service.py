@@ -99,9 +99,6 @@ class PropertyService:
         if not property_model:
             raise ValidationError("Property not found")
 
-        if property_model.createdBy != user_id:
-            raise ValidationError("Unauthorized to update this property")
-
         # Parse and validate data
         update_data = self._parse_property_data(data, user_id, is_update=True)
         update_data['updatedAt'] = datetime.utcnow()
