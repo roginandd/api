@@ -27,3 +27,18 @@ def chat():
     
     # Otherwise, it's a normal text response (String)
     return jsonify({"reply": response})
+
+@mark_bp.route('/summary', methods=['POST'])
+def get_summary():
+    data = request.json
+    property_id = data.get('propertyId')
+    chat_history = data.get('history', []) # <--- Get History
+
+    if not property_id:
+        return jsonify({"error": "Property ID is required"}), 400
+    
+    # Pass history to service
+    result = gemini_service.get_property_summary(property_id, history=chat_history)
+    
+    # Return both the visible reply and the hidden context
+    return jsonify(result)

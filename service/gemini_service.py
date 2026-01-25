@@ -626,3 +626,68 @@ If the request is vague (e.g., "make it blue"), you must infer the most sophisti
         except Exception as e:
             print(f"Chat Error: {str(e)}")
             return "I'm having trouble connecting right now. Let's try again in a moment."
+
+    def get_property_summary(self, property_id: str, history: list = None):
+        """
+        Fetches property details, injects them into context, and generates a summary.
+        Returns the summary text and the raw property JSON object.
+        """
+        if history is None:
+            history = []
+
+        # 1. Fetch real data
+        property_data = self.repo.get_property(property_id)
+        if not property_data:
+            return {
+                "summary": "I'm sorry, I can't seem to load the details for that property right now.",
+                "property": None
+            }
+
+        # 2. Serialize data for the AI prompt (Internal String)
+        # We still need the string version to feed into the Gemini prompt
+        prop_info_str = property_data.model_dump_json()
+        
+        # 3. Create the "Hidden Context" message for the AI
+        # This acts as the AI's short-term memory for this specific turn
+        context_message = f"""
+        [SYSTEM INJECTION: User has clicked on property card]
+        PROPERTY DATA: {prop_info_str}
+        """
+
+        # 4. Prepare the conversation for the summary generation
+        conversation_context = history + [
+            {"role": "user", "parts": [{"text": context_message}]}
+        ]
+
+        # 5. Prompt for the summary
+        system_instruction = """
+        You are Mark, a Real Estate AI. The user just opened a specific property.
+        
+        Task:
+        1. Acknowledge the property choice enthusiastically.
+        2. Give a 2-sentence summary of its key selling points (Location, Price, Amenities).
+        3. Ask a relevant hook question.
+        """
+
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=conversation_context,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.3,
+                )
+            )
+            
+            # Return the text summary AND the raw Property JSON object
+            return {
+                "summary": response.text,
+                "property": property_data.model_dump() # Returns the dictionary (JSON)
+            }
+            
+        except Exception as e:
+            print(f"Summary Error: {str(e)}")
+            return {
+                "summary": "That's a great property! Would you like to know more details about it?",
+                "property": property_data.model_dump() if property_data else None
+            }
