@@ -10,7 +10,8 @@ from PIL import Image, ImageEnhance, ImageFilter
 import requests
 from io import BytesIO
 from google.genai import types
-
+from google.genai.types import Tool, FunctionDeclaration, Schema, Type
+from repositories.property_repository import PropertyRepository
 
 # Static furniture inventory (placeholder data)
 FURNITURE_INVENTORY = [
@@ -41,6 +42,7 @@ class GeminiService:
 
     def __init__(self):
         self.client = get_gemini_client()
+        self.repo = PropertyRepository()
 
 
     def find_furniture_by_prompt(self, prompt: str) -> Optional[Dict[str, Any]]:
@@ -623,18 +625,78 @@ If the request is vague (e.g., "make it blue"), you must infer the most sophisti
 
     def chat_with_mark(self, user_query: str, history: list = None):
         """
-        The production-ready chatbot logic for Mark AI.
-        Processes a chat message with persistent history.
-        'history' should be a list of dicts: [{'role': 'user', 'parts': [{'text': '...'}]}, ...]
+        Production-ready chatbot logic with Property Search Tool.
         """
-
         if history is None:
             history = []
 
-        # Define the constraints and context here:
-        system_instruction = f"""
+        # 1. Define the Property Search Tool
+        search_tool = Tool(
+            function_declarations=[
+                FunctionDeclaration(
+                    name="search_properties",
+                    description="Search for properties based on user criteria like price, location, type, and amenities.",
+                    parameters=Schema(
+                        type=Type.OBJECT,
+                        properties={
+                            "keyword": Schema(
+                                type=Type.STRING, 
+                                description="Fuzzy search for address, name, or description"
+                            ),
+                            "propertyType": Schema(
+                                type=Type.STRING,
+                                description="Type of property",
+                                enum=["House", "Condo", "Apartment", "Lot", "Commercial"]
+                            ),
+                            "listingType": Schema(
+                                type=Type.STRING,
+                                description="Listing category",
+                                enum=["For Sale", "For Rent", "For Lease"]
+                            ),
+                            "minPrice": Schema(type=Type.NUMBER, description="Minimum price budget"),
+                            "maxPrice": Schema(type=Type.NUMBER, description="Maximum price budget"),
+                            "bedrooms": Schema(type=Type.NUMBER, description="Minimum number of bedrooms"),
+                            "bathrooms": Schema(type=Type.NUMBER, description="Minimum number of bathrooms"),
+                            "priceNegotiable": Schema(type=Type.BOOLEAN, description="If price is negotiable"),
+                            "parkingAvailable": Schema(type=Type.BOOLEAN, description="If parking is required"),
+                            "petPolicy": Schema(
+                                type=Type.STRING,
+                                enum=["Pets allowed", "No pets allowed", "Pets allowed with restrictions"]
+                            ),
+                            "amenities": Schema(
+                                type=Type.ARRAY,
+                                items=Schema(type=Type.STRING),
+                                description="List of required amenities (e.g., 'Swimming Pool', 'Gym')"
+                            ),
+                            "interiorFeatures": Schema(
+                                type=Type.ARRAY,
+                                items=Schema(type=Type.STRING),
+                                description="Interior features (e.g. 'Marble Floors')"
+                            ),
+                            "utilities": Schema(
+                                type=Type.ARRAY,
+                                items=Schema(type=Type.STRING),
+                                description="Utilities (e.g. 'Internet readiness')"
+                            ),
+                            "furnishing": Schema(
+                                type=Type.STRING,
+                                description="Furnishing status",
+                                enum=["Fully furnished", "Semi-furnished", "Unfurnished"]
+                            ),
+                            "storeys": Schema(
+                                type=Type.NUMBER, 
+                                description="Minimum number of storeys/floors"
+                            )
+                        },
+                    )
+                )
+            ]
+        )
+
+        # 2. Define the System Instruction
+        system_instruction = """
         You are Mark, the AI Real Estate Assistant for Vista. 
-        For context here is the Vista's full features:
+        For context here is Vista's full features:
         1. AI-Driven Custom Virtual Staging 
             • Instantly transform a property’s interior using AI—no physical staging, renovations, or redesign 
             costs. 
@@ -685,21 +747,157 @@ If the request is vague (e.g., "make it blue"), you must infer the most sophisti
           redirect them: "I'm here to help with your property search. Let's focus on Vista." and append with suggestion messages.
         - Use the provided context for accurate answers. If data is missing, say so.
         - Do not overwhelm; keep answers under 3 sentences unless asked for details.
+        
+        ### YOUR DATA CONTEXT
+        You have access to a database of properties with the following schema. 
+        Use these field definitions and Enums to understand user requests.
+
+        {
+            "property": {
+                "name": "String",
+                "description": "String",
+                "propertyType": "Enum: ['House', 'Condo', 'Apartment', 'Lot', 'Commercial']",
+                "listingType": "Enum: ['For Sale', 'For Rent', 'For Lease']",
+                "price": "Number (Float)",
+                "priceNegotiable": "Boolean",
+                "address": "String (City, Province, Street)",
+                "floorArea": "Number (sqm)",
+                "lotArea": "Number (sqm)",
+                "bedrooms": "Number",
+                "bathrooms": "Number",
+                "storeys": "Number",
+                "furnishing": "Enum: ['Fully furnished', 'Semi-furnished', 'Unfurnished']",
+                "condition": "Enum: ['New', 'Well-maintained', 'Renovated', 'Needs repair']",
+                "parkingAvailable": "Boolean",
+                "parkingSlots": "Number",
+                "availabilityDate": "Date (YYYY-MM-DD)",
+                "petPolicy": "Enum: ['Pets allowed', 'No pets allowed', 'Pets allowed with restrictions', 'Pets allowed with deposit', 'Service animals only']",
+                "smokingPolicy": "Enum: ['No smoking allowed', 'Smoking allowed outdoors only', 'Smoking allowed in designated areas', 'No restrictions']",
+                "amenities": "Array of Strings: ['Swimming Pool', 'Gym', 'Security (24/7)', 'Garden', 'Playground', 'Elevator', 'Generator', 'Clubhouse']",
+                "interiorFeatures": "Array of Strings: ['Air-conditioning', 'Built-in cabinets', 'Balcony', 'Kitchen appliances', 'Walk-in closet', 'Smart home system', 'Marble Floors', 'Floor-to-Ceiling Windows']",
+                "utilities": "Array of Strings: ['Water', 'Electricity', 'Internet readiness', 'Gas line', 'Sewage system']",
+                "ownershipStatus": "Enum: ['Free and Clear', 'Mortgaged', 'Under Foreclosure', 'Bank Owned', 'Government Owned', 'Private Owned']",
+                "terms": "Array of Strings (e.g., 'No smoking allowed', 'Minimum 1 year lease')",
+                "agentName": "String",
+                "developerName": "String"
+            }
+        }
+
+        ### RULES
+        1. If the user asks to find, search, or look for a property, CALL the `search_properties` function with the relevant filters.
+        2. Do NOT hallucinate listings. If you are not calling the function, only discuss Vista features or general real estate advice.
+        3. If the user mentions "good internet", map it to "utilities" containing "Internet readiness".
+        4. If the user mentions "cheap" or "affordable", ask for a specific price range before searching.
+        5. If the user looks for properties in a location, use the "keyword" filter for fuzzy matching. 
+        6. Be concise.
         """
 
         current_user_message = {"role": "user", "parts": [{"text": user_query}]}
         full_contents = history + [current_user_message]
 
         try:
+            # 3. Call Gemini with Tools
             response = self.client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=full_contents,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    temperature=0.1
+                    temperature=0.1,
+                    tools=[search_tool],
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        disable=True 
+                    )
                 )
             )
+
+            # 4. Handle Function Calls
+            if response.function_calls:
+                function_call = response.function_calls[0]
+                if function_call.name == "search_properties":
+                    filters = function_call.args
+                    print(f"🔍 AI extracted filters: {filters}")
+                    
+                    # --- REAL DB LOOKUP ---
+                    # Call the repository directly using the filters from AI
+                    properties_found = self.repo.search_properties(filters)
+                    
+                    if not properties_found:
+                        return "I searched for properties matching those criteria, but I couldn't find any listings right now."
+
+                    # Return structured data for the Controller to handle
+                    return {
+                        "type": "search_results",
+                        "data": properties_found,
+                        "text": f"I found {len(properties_found)} properties that match your criteria:"
+                    }
+
             return response.text
+
         except Exception as e:
             print(f"Chat Error: {str(e)}")
             return "I'm having trouble connecting right now. Let's try again in a moment."
+
+    def get_property_summary(self, property_id: str, history: list = None):
+        """
+        Fetches property details, injects them into context, and generates a summary.
+        Returns the summary text and the raw property JSON object.
+        """
+        if history is None:
+            history = []
+
+        # 1. Fetch real data
+        property_data = self.repo.get_property(property_id)
+        if not property_data:
+            return {
+                "summary": "I'm sorry, I can't seem to load the details for that property right now.",
+                "property": None
+            }
+
+        # 2. Serialize data for the AI prompt (Internal String)
+        # We still need the string version to feed into the Gemini prompt
+        prop_info_str = property_data.model_dump_json()
+        
+        # 3. Create the "Hidden Context" message for the AI
+        # This acts as the AI's short-term memory for this specific turn
+        context_message = f"""
+        [SYSTEM INJECTION: User has clicked on property card]
+        PROPERTY DATA: {prop_info_str}
+        """
+
+        # 4. Prepare the conversation for the summary generation
+        conversation_context = history + [
+            {"role": "user", "parts": [{"text": context_message}]}
+        ]
+
+        # 5. Prompt for the summary
+        system_instruction = """
+        You are Mark, a Real Estate AI. The user just opened a specific property.
+        
+        Task:
+        1. Acknowledge the property choice enthusiastically.
+        2. Give a 2-sentence summary of its key selling points (Location, Price, Amenities).
+        3. Ask a relevant hook question.
+        """
+
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=conversation_context,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.3,
+                )
+            )
+            
+            # Return the text summary AND the raw Property JSON object
+            return {
+                "summary": response.text,
+                "property": property_data.model_dump() # Returns the dictionary (JSON)
+            }
+            
+        except Exception as e:
+            print(f"Summary Error: {str(e)}")
+            return {
+                "summary": "That's a great property! Would you like to know more details about it?",
+                "property": property_data.model_dump() if property_data else None
+            }

@@ -17,4 +17,28 @@ def chat():
     # We now pass the history into our service method
     response = gemini_service.chat_with_mark(user_message, history=chat_history)
     
+    # Check if the response is a Structured Search Result (Dictionary)
+    # This happens when Mark AI performs a property search
+    if isinstance(response, dict) and response.get("type") == "search_results":
+        return jsonify({
+            "reply": response["text"],   # The spoken text (e.g. "I found 3 items")
+            "results": response["data"]  # The actual array of property objects
+        })
+    
+    # Otherwise, it's a normal text response (String)
     return jsonify({"reply": response})
+
+@mark_bp.route('/summary', methods=['POST'])
+def get_summary():
+    data = request.json
+    property_id = data.get('propertyId')
+    chat_history = data.get('history', []) # <--- Get History
+
+    if not property_id:
+        return jsonify({"error": "Property ID is required"}), 400
+    
+    # Pass history to service
+    result = gemini_service.get_property_summary(property_id, history=chat_history)
+    
+    # Return both the visible reply and the hidden context
+    return jsonify(result)
