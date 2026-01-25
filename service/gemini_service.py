@@ -411,6 +411,216 @@ If the request is vague (e.g., "make it blue"), you must infer the most sophisti
             print(f"[STAGING] ❌ Error during staging: {str(e)}")
             raise
     
+    def extract_furniture_from_the_image(self, session_id: str, image_index: int, budget: Optional[str] = None, furniture_items: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Extract furniture from an image and provide shopping recommendations.
+        
+        This function:
+        1. Retrieves the virtual staging session and image
+        2. Analyzes the image to identify furniture items
+        3. Searches for top 3 real products per furniture type within budget
+        4. Returns recommendations with exact prices and real retailer links
+        
+        Args:
+            session_id: Virtual staging session ID
+            image_index: Index of the panoramic image to analyze (0-based)
+            budget: Optional total budget limit (e.g., "$2,000")
+            furniture_items: Optional list of specific furniture types to search for
+        
+        Returns:
+            Dict with schema:
+            {
+                "total_budget_limit": "string",
+                "furniture_items": [
+                    {
+                        "item_type": "string",
+                        "top_3_suggestions": [
+                            {
+                                "product_name": "string",
+                                "retailer": "string",
+                                "price": "string",
+                                "link": "string",
+                                "why_it_is_a_pick": "string"
+                            }
+                        ]
+                    }
+                ]
+            }
+        """
+        try:
+            from repositories.virtual_staging_repository import VirtualStagingRepository
+            
+            # Retrieve the session
+            repository = VirtualStagingRepository()
+            session = repository.get_session(session_id)
+            
+            if not session:
+                print(f"[FURNITURE] ❌ Session not found: {session_id}")
+                return {
+                    "error": f"Session {session_id} not found",
+                    "total_budget_limit": budget or "Not specified",
+                    "furniture_items": []
+                }
+            
+            # Get the image URL for the specified index
+            image_url = None
+            
+            # Check current_image_urls dictionary first (working images)
+            if image_index in session.current_image_urls:
+                image_url = session.current_image_urls[image_index]
+                print(f"[FURNITURE] Using current image at index {image_index}: {image_url[:50]}...")
+            # Fallback to panoramic_images list
+            elif image_index < len(session.panoramic_images):
+                image_url = session.panoramic_images[image_index]
+                print(f"[FURNITURE] Using panoramic image at index {image_index}: {image_url[:50]}...")
+            else:
+                print(f"[FURNITURE] ❌ Image index {image_index} not found in session")
+                return {
+                    "error": f"Image index {image_index} not found in session",
+                    "total_budget_limit": budget or "Not specified",
+                    "furniture_items": []
+                }
+            
+            # Encode image to base64 for Gemini API
+            image_base64 = self.encode_image_to_base64(image_url)
+            mime_type = self.get_image_mime_type(image_url)
+            
+            # Clean and validate budget
+            clean_budget = None
+            if budget:
+                # Remove commas and extra spaces, convert to number
+                clean_budget = budget.replace(',', '').replace(' ', '').strip()
+                try:
+                    # Try to convert to float to validate it's a number
+                    float(clean_budget)
+                except ValueError:
+                    print(f"[FURNITURE] ⚠️  Invalid budget format: {budget}, using None")
+                    clean_budget = None
+            
+            # Validate that we have valid image data
+            if not image_base64 or not isinstance(image_base64, str) or len(image_base64.strip()) == 0:
+                print(f"[FURNITURE] ❌ Invalid image data: base64 is empty or not a string")
+                return {
+                    "error": "Failed to encode image for analysis",
+                    "total_budget_limit": budget or "Not specified",
+                    "furniture_items": []
+                }
+            
+            # Validate mime_type
+            if not mime_type or not isinstance(mime_type, str) or len(mime_type.strip()) == 0:
+                print(f"[FURNITURE] ❌ Invalid mime_type: {mime_type}")
+                mime_type = "image/jpeg"  # fallback
+            
+            # Single comprehensive prompt to analyze furniture and find real products
+            system_prompt = f"""
+                You are an expert Interior Sourcing Assistant specializing in the Philippine furniture market. Your goal is to analyze an uploaded image, identify furniture items, and generate dynamic search URLs for local shops based on a user-provided budget.
+
+                ### **CORE CAPABILITIES**
+                1. **Visual Analysis:** Extract every furniture item seen in the image (make it general) and disregard the color.
+                2. **Budget Allocation:** Dynamically split the user's total budget across the identified items. Ensure the total of the 'highest' (.lte) values does not exceed the user's total budget.
+                3. **URL Engineering:** Construct search URLs for each item using these specific templates:
+                    * **Mandaue Foam:** `https://mandauefoam.ph/search?q={{type}}&type=product&sort_by=relevance&filter.v.price.gte={{lowest}}&filter.v.price.lte={{highest}}`
+                    * **SM Home:** `https://smhome.ph/search?q={{type}}&type=product&sort_by=relevance&filter.v.price.gte={{lowest}}&filter.v.price.lte={{highest}}`
+                    * **Uratex:** `https://uratex.com.ph/search?type=product&q={{type}}&filter.v.price.lte={{highest}}&filter.v.price.gte={{lowest}}`
+
+
+                ### **MAPPING RULES**
+                * **q**: Set to the name of the furniture type (e.g., "Sofa").
+                * **.gte (lowest)**: The minimum price for that item's budget bracket.
+                * **.lte (highest)**: The maximum price for that item's budget bracket.
+
+                ### **RESPONSE FORMAT**
+                You MUST respond strictly in JSON format. Do not include markdown prose outside of the JSON block. Do not include a "why_this_pick" or "reasoning" field.
+
+                ```json
+                {{
+                "total_budget": {clean_budget if clean_budget else 0},
+                "currency": "PHP",
+                "extracted_furniture": [
+                    {{
+                    "item_type": "[Name of Furniture]",
+                    "description": "[Brief visual description]",
+                    "top_3_search_links": [
+                        {{
+                        "shop": "Mandaue Foam",
+                        "price_bracket": "[lowest] - [highest]",
+                        "search_url": "[Generated URL]"
+                        }},
+                        {{
+                        "shop": "SM Home",
+                        "price_bracket": "[lowest] - [highest]",
+                        "search_url": "[Generated URL]"
+                        }},
+                        {{
+                        "shop": "Uratex",
+                        "price_bracket": "[lowest] - [highest]",
+                        "search_url": "[Generated URL]"
+                        }}
+                    ]
+                    }}
+                ],
+                "budget_summary": {{
+                    "total_allocation": {clean_budget if clean_budget else 0},
+                    "strategy": "[Explanation of how the budget was split]"
+                }}
+                }}
+
+                TOTAL ALLOCATION MUST BE WITHIN THE USER'S BUDGET OF {clean_budget if clean_budget else 'Not Specified'}.
+                """
+            
+            print("[FURNITURE] 📸 Analyzing room and searching for furniture recommendations...")
+            print(f"[FURNITURE] Using image URL: {image_url[:50]}...")
+            print(f"[FURNITURE] Using budget: {budget} (cleaned: {clean_budget})")
+            print(f"[FURNITURE] Base64 length: {len(image_base64) if image_base64 else 0}")
+            print(f"[FURNITURE] MIME type: {mime_type}")
+            
+            # Call Gemini with Google Search grounding for real product links
+
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                # --- ADD THINKING CONFIG HERE ---
+            )
+            # Call Gemini to analyze furniture in the image
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    {
+                        "text": system_prompt
+                    },
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": image_base64
+                        }
+                    }
+                ],
+                config=config
+            )
+            result = json.loads(response.text)
+            
+            print(f"[FURNITURE] ✅ Successfully extracted furniture from image")
+            if "furniture_items" in result:
+                print(f"[FURNITURE] 📊 Found {len(result['furniture_items'])} furniture types")
+            
+            
+            return result
+            
+        except json.JSONDecodeError as e:
+            print(f"[FURNITURE] ⚠️  Failed to parse response: {str(e)}")
+            return {
+                "error": f"Invalid JSON response from Gemini: {str(e)}",
+                "total_budget_limit": budget or "Not specified",
+                "furniture_items": []
+            }
+        except Exception as e:
+            print(f"[FURNITURE] ❌ Error extracting furniture: {str(e)}")
+            return {
+                "error": str(e),
+                "total_budget_limit": budget or "Not specified",
+                "furniture_items": []
+            }
+
+
     def chat_with_mark(self, user_query: str, history: list = None):
         """
         The production-ready chatbot logic for Mark AI.

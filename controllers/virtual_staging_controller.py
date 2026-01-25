@@ -77,14 +77,6 @@ def get_image_mime_type(image_path: str) -> str:
     return mime_types.get(ext, 'image/jpeg')
 
 
-def get_session_lock(session_id: str) -> Lock:
-    """Get or create a lock for a session to prevent concurrent generation requests"""
-    global _generation_locks, _generation_locks_lock
-    
-    with _generation_locks_lock:
-        if session_id not in _generation_locks:
-            _generation_locks[session_id] = Lock()
-        return _generation_locks[session_id]
 
 
 # Create blueprint
@@ -189,10 +181,7 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
         return {'error': 'Missing required field: session_id'}, 400
     
     # Acquire lock for this session - only one generation at a time
-    session_lock = get_session_lock(session_id)
     
-    if not session_lock.acquire(blocking=False):
-        return {'error': f'Another image generation is already in progress for session {session_id}. Please wait and try again.'}, 429
     
     try:
         # Get custom_prompt (required)
@@ -279,23 +268,35 @@ def generate_staging() -> Tuple[Dict[str, Any], int]:
     
     except Exception as e:
         return {'error': f'Error generating staging: {str(e)}'}, 500
-    finally:
-        # Always release the lock when done
-        session_lock.release()
+
 
 
 @virtual_staging_bp.route('/session/<session_id>', methods=['GET'])
 def get_session(session_id: str) -> Tuple[Dict[str, Any], int]:
-    """Get a staging session with all metadata"""
+    """Get a staging session with all metadata in the response format"""
     try:
         response = vs_service.get_session_response(session_id)
         
         if not response:
             return {'error': 'Session not found'}, 404
         
+        # Format datetime in GMT format
+        def format_datetime(dt):
+            if dt is None:
+                return None
+            if isinstance(dt, str):
+                return dt
+            return dt.strftime('%a, %d %b %Y %H:%M:%S GMT')
+        
+        session_data = response.model_dump(mode='json')
+        # Ensure datetime fields are formatted correctly
+        session_data['created_at'] = format_datetime(response.created_at)
+        session_data['updated_at'] = format_datetime(response.updated_at)
+        session_data['completed_at'] = format_datetime(response.completed_at)
+        
         return {
             'message': 'Session retrieved successfully',
-            'session': response.model_dump()
+            'session': session_data
         }, 200
     
     except Exception as e:
@@ -367,7 +368,6 @@ def refine_staging() -> Tuple[Dict[str, Any], int]:
             'message': 'Staging refined successfully',
             'image_url': response.image_url,
             'image_path': image_path,
-            'version': response.version,
             'updated_at': response.updated_at.isoformat(),
             'prompt_used': response.prompt_used
         }, 200
@@ -475,11 +475,11 @@ def get_color_palettes() -> Tuple[Dict[str, Any], int]:
     }, 200
 
 
-# ==================== VERSIONING OPERATIONS ====================
+# ==================== SAVE OPERATIONS ====================
 @virtual_staging_bp.route('/save-change', methods=['POST'])
 def save_change() -> Tuple[Dict[str, Any], int]:
     """
-    Save the current working image as a new version in history
+    Save the current working image to persist changes
     
     JSON body:
     {
@@ -503,7 +503,6 @@ def save_change() -> Tuple[Dict[str, Any], int]:
         
         return {
             'message': response.message,
-            'version': response.version,
             'image_url': response.image_url,
             'saved_at': response.saved_at.isoformat()
         }, 200
@@ -515,14 +514,13 @@ def save_change() -> Tuple[Dict[str, Any], int]:
 @virtual_staging_bp.route('/session/<session_id>/save-change', methods=['POST'])
 def save_session_change(session_id: str) -> Tuple[Dict[str, Any], int]:
     """
-    Save the current working image as a new version in history and persist to AWS
+    Save the current working image and persist to AWS
     
     This is the RESTful endpoint that uses session_id from the URL path.
     It will:
     1. Persist the current working image to AWS S3
-    2. Create a new version with versioning
-    3. Update the session in Firestore
-    4. Return the new version information
+    2. Update the session in Firestore
+    3. Return the saved image information
     
     URL path:
     /api/virtual-staging/session/<session_id>/save-change
@@ -534,7 +532,7 @@ def save_session_change(session_id: str) -> Tuple[Dict[str, Any], int]:
             return {'error': f'Session {session_id} not found'}, 404
         
         # Check if there's a current working image to save
-        if not session.current_image_path or not os.path.exists(session.current_image_path):
+        if not session.current_image_url:
             return {'error': 'No current working image to save for this session'}, 400
         
         # Save the change (persists to AWS and creates new version)
@@ -546,9 +544,53 @@ def save_session_change(session_id: str) -> Tuple[Dict[str, Any], int]:
         return {
             'message': response.message,
             'session_id': session_id,
-            'version': response.version,
             'image_url': response.image_url,
-            'saved_at': response.saved_at.isoformat()
+            'saved_at': response.saved_at.strftime('%a, %d %b %Y %H:%M:%S GMT')
+        }, 200
+    
+    except Exception as e:
+        return {'error': f'Error saving session change: {str(e)}'}, 500
+
+
+@virtual_staging_bp.route('/session/<session_id>/save-change-with-session', methods=['POST'])
+def save_session_change_with_session(session_id: str) -> Tuple[Dict[str, Any], int]:
+    """
+    Save the current working image and return complete session response
+    
+    Same as /save-change but returns the full session data in the response format:
+    {
+        "message": "Changes saved successfully",
+        "session": { ... full session data ... }
+    }
+    
+    URL path:
+    /api/virtual-staging/session/<session_id>/save-change-with-session
+    """
+    try:
+        # Validate session exists
+        session = vs_service.get_session(session_id)
+        if not session:
+            return {'error': f'Session {session_id} not found'}, 404
+        
+        # Check if there's a current working image to save
+        if not session.current_image_url:
+            return {'error': 'No current working image to save for this session'}, 400
+        
+        # Save the change (persists to AWS and creates new version)
+        save_response = vs_service.save_change(session_id)
+        
+        if not save_response or not save_response.success:
+            return {'error': save_response.message if save_response else 'Failed to save change'}, 500
+
+        # Get the full session response after saving
+        session_response = vs_service.get_session_response(session_id)
+        
+        if not session_response:
+            return {'error': 'Failed to retrieve session after save'}, 500
+
+        return {
+            'message': save_response.message,
+            'session': session_response.model_dump(mode='json')
         }, 200
     
     except Exception as e:
@@ -558,58 +600,29 @@ def save_session_change(session_id: str) -> Tuple[Dict[str, Any], int]:
 @virtual_staging_bp.route('/revert-change', methods=['POST'])
 def revert_change() -> Tuple[Dict[str, Any], int]:
     """
-    Revert to a previous saved version
+    Revert to a previous saved version - NOT SUPPORTED
     
-    JSON body:
-    {
-        "session_id": str,
-        "version_to_revert_to": int
-    }
+    Versioning has been removed. This endpoint returns an error.
     """
-    try:
-        data = request.get_json()
-        
-        if not data:
-            return {'error': 'No JSON data provided'}, 400
-        
-        session_id = data.get('session_id')
-        version_to_revert_to = data.get('version_to_revert_to')
-        
-        if not session_id or version_to_revert_to is None:
-            return {'error': 'Missing required fields: session_id, version_to_revert_to'}, 400
-        
-        response = vs_service.revert_change(session_id, version_to_revert_to)
-        
-        if not response or not response.success:
-            return {'error': response.message if response else 'Failed to revert change'}, 500
-        
-        return {
-            'message': response.message,
-            'version': response.version,
-            'image_url': response.image_url,
-            'reverted_at': response.reverted_at.isoformat()
-        }, 200
-    
-    except Exception as e:
-        return {'error': f'Error reverting change: {str(e)}'}, 500
+    return {'error': 'Versioning is not supported. Revert functionality is disabled.'}, 400
 
 
 @virtual_staging_bp.route('/version-history/<session_id>', methods=['GET'])
 def get_version_history(session_id: str) -> Tuple[Dict[str, Any], int]:
-    """Get complete version history for a session"""
+    """Get version history for a session - returns empty since versioning is disabled"""
     try:
-        response = vs_service.get_version_history(session_id)
-        
-        if not response:
+        # Check if session exists
+        session = vs_service.get_session(session_id)
+        if not session:
             return {'error': 'Session not found'}, 404
         
         return {
-            'message': 'Version history retrieved successfully',
-            'session_id': response.session_id,
-            'total_versions': response.total_versions,
-            'current_version': response.current_version,
-            'has_unsaved_changes': response.has_unsaved_changes,
-            'versions': [v.model_dump() for v in response.versions]
+            'message': 'Versioning is disabled - no version history available',
+            'session_id': session_id,
+            'total_versions': 0,
+            'current_version': 1,
+            'has_unsaved_changes': False,
+            'versions': []
         }, 200
     
     except Exception as e:
@@ -658,7 +671,6 @@ def get_chat_history(session_id: str) -> Tuple[Dict[str, Any], int]:
     
     except Exception as e:
         return {'error': f'Error retrieving chat history: {str(e)}'}, 500
-
 
 @virtual_staging_bp.route('/chat-history/<session_id>/messages', methods=['GET'])
 def get_chat_messages(session_id: str) -> Tuple[Dict[str, Any], int]:
@@ -759,3 +771,73 @@ def get_furniture_inventory():
     
     except Exception as e:
         return {'error': f'Error getting furniture inventory: {str(e)}'}, 500
+
+
+@virtual_staging_bp.route('/extract-furniture/<session_id>/<int:image_index>', methods=['POST'])
+def extract_furniture(session_id: str, image_index: int):
+    """
+    Extract furniture from an image and provide shopping recommendations.
+    
+    Request body (JSON):
+    {
+        "budget": "optional string (e.g., '$2,000')",
+        "furniture_items": "optional list of specific furniture types to search for"
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "total_budget_limit": "string",
+        "furniture_items": [
+            {
+                "item_type": "string",
+                "top_3_suggestions": [
+                    {
+                        "product_name": "string",
+                        "retailer": "string",
+                        "price": "string",
+                        "link": "string",
+                        "why_it_is_a_pick": "string"
+                    }
+                ]
+            }
+        ]
+    }
+    """
+    try:
+        # Get request data
+        data = request.get_json() or {}
+        budget = data.get('budget')
+        furniture_items = data.get('furniture_items')
+        
+        print(f"[API] 🔍 Extracting furniture from session {session_id}, image index {image_index}")
+        print(f"[API] Budget: {budget}, Specific items: {furniture_items}")
+        
+        # Call the furniture extraction service
+        result = vs_service.gemini_service.extract_furniture_from_the_image(
+            session_id=session_id,
+            image_index=image_index,
+            budget=budget,
+            furniture_items=furniture_items
+        )
+        
+        if result and 'error' not in result:
+            return {
+                'success': True,
+                'message': f'Successfully extracted furniture from image {image_index}',
+                **result  # Unpack total_budget_limit and furniture_items
+            }, 200
+        else:
+            return {
+                'success': False,
+                'error': result.get('error', 'Unknown error during furniture extraction'),
+                'total_budget_limit': budget or 'Not specified',
+                'furniture_items': []
+            }, 400
+    
+    except Exception as e:
+        print(f"[API] ❌ Error in extract_furniture endpoint: {str(e)}")
+        return {
+            'success': False,
+            'error': f'Error extracting furniture: {str(e)}'
+        }, 500

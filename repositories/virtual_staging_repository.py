@@ -94,8 +94,6 @@ class VirtualStagingRepository(BaseRepository[VirtualStaging]):
             return False
         
         session.generated_image_url = image_url
-        session.version += 1
-        session.status = StagingStatus.COMPLETED
         
         self.update_session(session)
         return True

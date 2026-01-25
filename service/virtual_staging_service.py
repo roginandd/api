@@ -1,7 +1,7 @@
 """Service layer for VirtualStaging entity with versioning and save/revert functionality"""
 from typing import Optional, List, Tuple, Dict, Any
 from datetime import datetime
-from models.virtual_staging import VirtualStaging, StagingParameters, ImageVersion
+from models.virtual_staging import VirtualStaging, StagingParameters
 from models.virtual_staging_response import (
     VirtualStagingResponse, 
     StagingMetadata, 
@@ -92,9 +92,7 @@ class VirtualStagingService:
                 chat_history_id=chat_history_id,
                 orignal_image_key=s3_key,  # S3 key
                 original_image_url=original_image_url,  # S3 URL
-                current_parameters=staging_parameters,
-                version=0,
-                last_saved_version=0
+                current_parameters=staging_parameters
             )
             
             print(f"[SESSION] VirtualStaging created with S3 URL: {staging.original_image_url}")
@@ -247,7 +245,7 @@ class VirtualStagingService:
             # Upload generated image to S3 (working version - not yet saved permanently)
             upload_result = self.aws_service.upload_bytes(
                 image_bytes=generated_image_bytes,
-                filename=f"generated_{session_id}_v{session.version + 1}.png",
+                filename=f"generated_{session_id}_{image_index}.png",
                 folder=f"staging/{session_id}",
                 content_type="image/png"
             )
@@ -266,6 +264,11 @@ class VirtualStagingService:
             session.current_parameters = params
             session.current_prompt = prompt
             session.updated_at = datetime.utcnow()
+            
+            # Update panoramic_images at the current index with the latest generated S3 URL
+            if image_index < len(session.panoramic_images):
+                session.panoramic_images[image_index] = upload_result["url"]
+                print(f"[STAGING] Updated panoramic_images[{image_index}] with generated image: {upload_result['url']}")
             
             # Add to generation history
             session.generation_history.append({
@@ -305,7 +308,6 @@ class VirtualStagingService:
             metadata = StagingMetadata(
                 session_id=session_id,
                 property_id=session.property_id,
-                version=session.version,
                 specific_request=params.specific_requests if params else None,
                 created_at=session.created_at,
                 updated_at=datetime.utcnow(),
@@ -317,7 +319,7 @@ class VirtualStagingService:
                 metadata=metadata,
                 prompt_used=prompt,
                 furniture_list=None,
-                can_revert=len(session.saved_versions) > 0
+                can_revert=False  # No versions to revert to
             )
         
         except Exception as e:
@@ -326,14 +328,14 @@ class VirtualStagingService:
     
     def save_change(self, session_id: str) -> Optional[SaveChangeResponse]:
         """
-        Save the current working version to history.
+        Save the current working image to the session.
         Updates the panoramic_images array at the current index with the generated image URL.
         
         Args:
             session_id: Session ID
         
         Returns:
-            SaveChangeResponse with success status and new version, or None if failed
+            SaveChangeResponse with success status, or None if failed
         """
         try:
             session = self.get_session(session_id)
@@ -346,54 +348,34 @@ class VirtualStagingService:
                 print(f"No working image to save for session {session_id}")
                 return None
             
-            new_version = session.version + 1
             now = datetime.utcnow()
             
-            # Create new saved version with the current image URL
-            image_version = ImageVersion(
-                version_number=new_version,
-                image_key=session.current_image_key,
-                image_url=session.current_image_url,
-                prompt_used=session.current_prompt or "",
-                parameters=session.current_parameters or StagingParameters(),
-                is_saved=True,
-                created_at=now,
-                saved_at=now
-            )
-            
-            print(f"[SAVE] Saved version {new_version}: {image_version.image_url}")
-            
-            # Add to saved versions history
-            session.saved_versions.append(image_version)
-            session.version = new_version
-            session.last_saved_version = new_version
-            session.updated_at = now
-            
-            # Update the panoramic image at current index with the newly saved URL
+            # Update the panoramic image at current index with the current URL
             if session.current_image_index < len(session.panoramic_images):
-                session.panoramic_images[session.current_image_index] = image_version.image_url
-                print(f"[SAVE] Updated panoramic_images[{session.current_image_index}] with: {image_version.image_url}")
+                session.panoramic_images[session.current_image_index] = session.current_image_url
+                print(f"[SAVE] Updated panoramic_images[{session.current_image_index}] with: {session.current_image_url}")
                 
-                # Clear the working version for this index since it's now saved
+                # Clear the working version for this index
                 if session.current_image_index in session.current_image_urls:
                     del session.current_image_urls[session.current_image_index]
                     print(f"[SAVE] Cleared working version for index {session.current_image_index}")
             
-            # Move from working to saved in generation history
+            # Update generation history
             if session.generation_history:
                 session.generation_history[-1]["saved"] = True
                 session.generation_history[-1]["saved_at"] = now.isoformat()
-                session.generation_history[-1]["aws_key"] = image_version.image_key
-                session.generation_history[-1]["aws_url"] = image_version.image_url
+                session.generation_history[-1]["aws_key"] = session.current_image_key
+                session.generation_history[-1]["aws_url"] = session.current_image_url
+            
+            session.updated_at = now
             
             # Update session
             self.repository.update_session(session)
             
             return SaveChangeResponse(
                 success=True,
-                version=new_version,
-                message=f"Version {new_version} saved successfully",
-                image_url=image_version.image_url,
+                message="Changes saved successfully",
+                image_url=session.current_image_url,
                 saved_at=now
             )
         
@@ -409,108 +391,44 @@ class VirtualStagingService:
     
     def revert_change(self, session_id: str, version_to_revert_to: int) -> Optional[RevertChangeResponse]:
         """
-        Revert to a previous saved version. Sets that version as the current working version.
+        Revert is not supported since versioning is disabled.
         
         Args:
             session_id: Session ID
-            version_to_revert_to: Version number to revert to
+            version_to_revert_to: Version number (ignored)
         
         Returns:
-            RevertChangeResponse with success status and reverted version, or None if failed
+            RevertChangeResponse with failure status
         """
-        try:
-            session = self.get_session(session_id)
-            if not session:
-                print(f"Session {session_id} not found")
-                return None
-            
-            # Find the version to revert to
-            target_version = None
-            for version in session.saved_versions:
-                if version.version_number == version_to_revert_to:
-                    target_version = version
-                    break
-            
-            if not target_version:
-                print(f"Version {version_to_revert_to} not found in session {session_id}")
-                return RevertChangeResponse(
-                    success=False,
-                    version=session.version,
-                    message=f"Version {version_to_revert_to} not found",
-                    image_url=session.current_image_url or "",
-                    reverted_at=datetime.utcnow()
-                )
-            
-            # Set the reverted version as current working version
-            session.current_image_key = target_version.image_key
-            session.current_image_url = target_version.image_url
-            session.current_parameters = target_version.parameters
-            session.current_prompt = target_version.prompt_used
-            session.updated_at = datetime.utcnow()
-            
-            # Add revert action to generation history
-            session.generation_history.append({
-                "timestamp": datetime.utcnow().isoformat(),
-                "action": "revert",
-                "reverted_to_version": version_to_revert_to,
-                "image_key": target_version.image_key,
-                "image_url": target_version.image_url
-            })
-            
-            self.repository.update_session(session)
-            
-            return RevertChangeResponse(
-                success=True,
-                version=version_to_revert_to,
-                message=f"Reverted to version {version_to_revert_to} successfully",
-                image_url=session.current_image_url,
-                reverted_at=datetime.utcnow()
-            )
-        
-        except Exception as e:
-            print(f"Error reverting change: {str(e)}")
-            return RevertChangeResponse(
-                success=False,
-                version=0,
-                message=f"Error reverting change: {str(e)}",
-                image_url="",
-                reverted_at=datetime.utcnow()
-            )
+        return RevertChangeResponse(
+            success=False,
+            version=1,
+            message="Revert not supported - versioning is disabled",
+            image_url="",
+            reverted_at=datetime.utcnow()
+        )
     
     def get_version_history(self, session_id: str) -> Optional[VersionHistoryResponse]:
         """
-        Get complete version history for a session
+        Get version history for a session (returns empty since versioning is disabled)
         
         Args:
             session_id: Session ID
         
         Returns:
-            VersionHistoryResponse with all saved versions, or None if failed
+            VersionHistoryResponse with no versions
         """
         try:
             session = self.get_session(session_id)
             if not session:
                 return None
             
-            versions = []
-            for version in session.saved_versions:
-                versions.append(VersionHistoryItem(
-                    version_number=version.version_number,
-                    image_url=version.image_url,
-                    parameters=version.parameters.model_dump() if version.parameters else {},
-                    prompt_used=version.prompt_used,
-                    created_at=version.created_at,
-                    saved_at=version.saved_at or version.created_at,
-                    is_current=session.current_image_key == version.image_key
-                ))
-            
             return VersionHistoryResponse(
                 session_id=session_id,
-                total_versions=len(session.saved_versions),
-                current_version=session.version,
-                has_unsaved_changes=session.current_image_url is not None 
-                                   and session.current_image_url not in [v.image_url for v in session.saved_versions],
-                versions=versions
+                total_versions=0,
+                current_version=1,
+                has_unsaved_changes=session.current_image_url is not None,
+                versions=[]
             )
         
         except Exception as e:
@@ -525,23 +443,41 @@ class VirtualStagingService:
         """Get all sessions for a property"""
         return self.repository.get_sessions_by_property(property_id)
     
+    def get_panoramic_images_by_property(self, property_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get panoramic images for a property from the most recent virtual staging session
+        
+        Args:
+            property_id: Property ID
+            
+        Returns:
+            Dict with session_id and panoramic_images, or None if no session found
+        """
+        sessions = self.get_sessions_by_property(property_id)
+        if not sessions:
+            return None
+            
+        # Get the most recent session (assuming sessions are returned in some order, 
+        # or we can sort by created_at if needed)
+        session_id, session = sessions[0]  # For now, just take the first one
+        
+        return {
+            'session_id': session_id,
+            'panoramic_images': session.panoramic_images
+        }
+    
     def get_sessions_by_user(self, user_id: int) -> List[Tuple[str, VirtualStaging]]:
         """Get all sessions for a user"""
         return self.repository.get_sessions_by_user(user_id)
     
     def get_session_response(self, session_id: str) -> Optional[StagingSessionResponse]:
         """
-        Get staging session as API response with all metadata including all furniture lists
+        Get staging session as API response with all metadata
         """
         try:
             session = self.get_session(session_id)
             if not session:
                 return None
-            
-            # Get last saved version
-            last_saved_url = None
-            if session.saved_versions:
-                last_saved_url = session.saved_versions[-1].image_url
             
             # Get panoramic images from the property
             panoramic_images = []
@@ -560,23 +496,27 @@ class VirtualStagingService:
                         for img in property_obj.images 
                         if img.imageType == "panoramic"
                     ]
+                    
+                    # Override URLs with latest staged versions from session.panoramic_images
+                    for idx, staged_url in enumerate(session.panoramic_images):
+                        if idx < len(panoramic_images) and staged_url:
+                            panoramic_images[idx]['url'] = staged_url
+                            print(f"[RESPONSE] Updated panoramic_images[{idx}] URL to staged version: {staged_url}")
+                            
             except Exception as e:
                 print(f"Warning: Could not load panoramic images for session {session_id}: {str(e)}")
             
             params_dict = session.current_parameters.model_dump() if session.current_parameters else {}
             
+
             response = StagingSessionResponse(
                 session_id=session.session_id,
                 property_id=session.property_id,
                 original_image_url=session.original_image_url,
                 current_image_url=session.current_image_url,
-                last_saved_image_url=last_saved_url,
                 panoramic_images=panoramic_images,
                 staging_parameters=params_dict,
-                current_version=session.version,
-                total_versions=len(session.saved_versions),
-                has_unsaved_changes=session.current_image_url is not None 
-                                   and session.current_image_url not in [v.image_url for v in session.saved_versions],
+                has_unsaved_changes=session.current_image_url is not None,
                 created_at=session.created_at,
                 updated_at=session.updated_at,
                 completed_at=session.completed_at,
@@ -682,25 +622,32 @@ class VirtualStagingService:
                 print(f"Failed to generate refined image for session {session_id}")
                 return None
             
-            # Save refined image locally (working version - not yet saved to AWS)
-            upload_folder = Path('uploads')
-            upload_folder.mkdir(parents=True, exist_ok=True)
+            # Upload refined image to S3 (working version - not yet permanently saved)
+            upload_result = self.aws_service.upload_bytes(
+                image_bytes=refined_image_bytes,
+                filename=f"refined_{session_id}_{image_index}.png",
+                folder=f"staging/{session_id}",
+                content_type="image/png"
+            )
             
-            local_filename = f"generated_{session_id}_v{session.version + 1}.png"
-            local_path = upload_folder / local_filename
+            if not upload_result.get("success"):
+                print(f"Failed to upload refined image to S3: {upload_result.get('error')}")
+                return None
             
-            with open(local_path, 'wb') as f:
-                f.write(refined_image_bytes)
+            print(f"[REFINE] Uploaded refined image to S3: {upload_result['url']}")
             
-            print(f"[REFINE] Saved refined image locally: {local_path}")
-            
-            # Update session with new working version (local only)
-            session.current_image_path = str(local_path)
-            session.current_image_key = None
-            session.current_image_url = None
+            # Update session with new working version from S3
+            session.current_image_path = None  # No longer using local paths
+            session.current_image_key = upload_result["key"]
+            session.current_image_url = upload_result["url"]
             session.current_parameters = new_staging_parameters
             session.current_prompt = full_refinement_prompt
             session.updated_at = datetime.utcnow()
+            
+            # Update panoramic_images at the current index with the latest refined S3 URL
+            if session.current_image_index < len(session.panoramic_images):
+                session.panoramic_images[session.current_image_index] = upload_result["url"]
+                print(f"[REFINE] Updated panoramic_images[{session.current_image_index}] with refined image: {upload_result['url']}")
             
             # Add to generation history
             session.generation_history.append({
@@ -723,7 +670,7 @@ class VirtualStagingService:
                         history_id=session.chat_history_id,
                         message_id=f"msg_{uuid.uuid4().hex[:12]}",
                         content=user_message,
-                        refinement_iteration=session.version + 1
+                        refinement_iteration=1
                     )
                 
                 # Add assistant message with the refinement prompt and parameters
@@ -731,7 +678,7 @@ class VirtualStagingService:
                     history_id=session.chat_history_id,
                     message_id=f"msg_{uuid.uuid4().hex[:12]}",
                     content=f"Generated refined image with the following adjustments",
-                    refinement_iteration=session.version + 1,
+                    refinement_iteration=1,
                     staging_parameters=new_staging_parameters.model_dump()
                 )
                 
@@ -739,14 +686,9 @@ class VirtualStagingService:
                 self.chat_history_service.repository.increment_iteration(session.chat_history_id)
                 print(f"[REFINE] Chat history updated for session {session_id}")
             
-            # Convert local image to base64 for response (use local_path directly)
-            import base64
-            with open(local_path, 'rb') as f:
-                image_data = base64.b64encode(f.read()).decode('utf-8')
-            image_data_url = f"data:image/png;base64,{image_data}"
-            
+            # Return refined image URL from S3 (instead of base64)
             return RefinementResponse(
-                image_url=image_data_url,
+                image_url=upload_result["url"],
                 updated_at=session.updated_at,
                 prompt_used=full_refinement_prompt
             )
@@ -766,8 +708,7 @@ class VirtualStagingService:
                     print(f"[DELETE] Deleted chat history: {session.chat_history_id}")
                 
                 # Delete all versions from AWS
-                for version in session.saved_versions:
-                    self.aws_service.delete_file(version.image_key)
+                # No versions to delete since versioning is disabled
                 
                 # Delete current working image
                 if session.current_image_key:

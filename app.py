@@ -27,8 +27,10 @@ CORS(app,
          "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
          "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
          "expose_headers": ["Content-Type", "Content-Length"],
-         "supports_credentials": False
-     }})
+         "supports_credentials": False,
+         "max_age": 3600
+     }},
+     send_wildcard=True)
 
 # Register the Blueprints
 app.register_blueprint(virtual_staging_bp)

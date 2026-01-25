@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from typing import Dict, Any
 from service.property_service import PropertyService, ValidationError
 from service.inquiry_service import InquiryService
+from service.virtual_staging_service import VirtualStagingService
 from models.property import PropertyImage
 import logging
 
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 property_bp = Blueprint('property', __name__, url_prefix='/api/properties')
 property_service = PropertyService()
 inquiry_service = InquiryService()
+vs_service = VirtualStagingService()
 
 
 @property_bp.route('', methods=['POST'])
@@ -536,5 +538,37 @@ def upload_property_images(property_id: str):
             'error': {
                 'code': 'FILE_UPLOAD_ERROR',
                 'message': 'Failed to upload images'
+            }
+        }), 500
+
+
+@property_bp.route('/<property_id>/panoramic-images', methods=['GET'])
+def get_panoramic_images_by_property(property_id: str):
+    """Get panoramic images for a property from its virtual staging session"""
+    try:
+        result = vs_service.get_panoramic_images_by_property(property_id)
+
+        if not result:
+            return jsonify({
+                'success': False,
+                'error': {
+                    'code': 'SESSION_NOT_FOUND',
+                    'message': f'No virtual staging session found for property {property_id}'
+                }
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'session_id': result['session_id'],
+            'panoramic_images': result['panoramic_images']
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error retrieving panoramic images for property {property_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': {
+                'code': 'INTERNAL_ERROR',
+                'message': 'Failed to retrieve panoramic images'
             }
         }), 500

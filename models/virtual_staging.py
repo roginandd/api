@@ -41,26 +41,14 @@ class StagingParameters(BaseModel):
     specific_requests: Optional[str] = Field(default=None, description="Additional customization requests")
 
 
-class ImageVersion(BaseModel):
-    """Represents a version/revision of a generated image"""
-    version_number: int = Field(..., description="Version number in sequence")
-    image_key: str = Field(..., description="S3 key/path to the image")
-    image_url: str = Field(..., description="Full URL to the image in S3")
-    prompt_used: str = Field(..., description="The prompt used to generate this version")
-    parameters: StagingParameters = Field(..., description="Staging parameters used for this version")
-    is_saved: bool = Field(default=False, description="Whether this version has been saved (committed)")
-    created_at: datetime = Field(default_factory=datetime.utcnow, description="When this version was generated")
-    saved_at: Optional[datetime] = Field(default=None, description="When this version was saved")
-
-
 class VirtualStaging(BaseModel):
-    """Virtual staging session model with version history and safety features"""
+    """Virtual staging session model"""
     
     session_id: str = Field(..., description="Unique identifier for the virtual staging session")
     property_id: str = Field(..., description="Identifier for the associated property")
     
     # Panoramic images from property
-    panoramic_images: List[str] = Field(default_factory=list, description="List of panoramic image URLs from the property (updated when saved)")
+    panoramic_images: List[str] = Field(default_factory=list, description="List of panoramic image URLs from the property")
     current_image_index: int = Field(default=0, description="Index of the currently working panoramic image")
     
     # Chat history reference
@@ -71,22 +59,15 @@ class VirtualStaging(BaseModel):
     original_image_url: Optional[str] = Field(default=None, description="Full URL of the original image in S3")
     original_image_path: Optional[str] = Field(default=None, description="Local file path of the original image")
     
-    # Current state (working version - not yet saved)
+    # Current state
     current_image_key: Optional[str] = Field(default=None, description="S3 key of current working image")
     current_image_url: Optional[str] = Field(default=None, description="Full URL of current working image")
-    current_image_urls: Dict[int, str] = Field(default_factory=dict, description="Dictionary mapping panoramic image indices to their current working (unsaved) image URLs")
+    current_image_urls: Dict[int, str] = Field(default_factory=dict, description="Dictionary mapping panoramic image indices to their current working image URLs")
     current_image_path: Optional[str] = Field(default=None, description="Local file path of current working image")
     current_parameters: Optional[StagingParameters] = Field(default=None, description="Parameters for current working image")
     current_prompt: Optional[str] = Field(default=None, description="Prompt used for current working image")
     
-    # Saved versions history
-    saved_versions: List[ImageVersion] = Field(default_factory=list, description="List of all saved image versions")
-    
-    # Current version tracking
-    version: int = Field(default=0, description="Current version number (increments when saved)")
-    last_saved_version: int = Field(default=0, description="The last version that was saved")
-    
-    # Generation history (all attempts, saved or not)
+    # Generation history
     generation_history: List[Dict[str, Any]] = Field(default_factory=list, description="All generation attempts in this session")
     
     # Timestamps
@@ -114,23 +95,12 @@ class VirtualStaging(BaseModel):
             'current_image_urls': {str(k): v for k, v in self.current_image_urls.items()},  # Convert int keys to strings for Firestore
             'current_image_path': self.current_image_path,
             'current_prompt': self.current_prompt,
-            'version': self.version,
-            'last_saved_version': self.last_saved_version,
             'generation_history': self.generation_history,
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'error_message': self.error_message,
-            'current_parameters': self.current_parameters.model_dump() if self.current_parameters else None,
-            'saved_versions': [
-                {
-                    **v.model_dump(),
-                    'created_at': v.created_at.isoformat(),
-                    'saved_at': v.saved_at.isoformat() if v.saved_at else None,
-                    'parameters': v.parameters.model_dump()
-                }
-                for v in self.saved_versions
-            ] if self.saved_versions else []
+            'current_parameters': self.current_parameters.model_dump() if self.current_parameters else None
         }
         return data
 
@@ -151,19 +121,5 @@ class VirtualStaging(BaseModel):
         # Handle current_image_urls - convert string keys back to integers
         if isinstance(data.get('current_image_urls'), dict):
             data['current_image_urls'] = {int(k): v for k, v in data['current_image_urls'].items()}
-        
-        # Handle saved versions
-        if isinstance(data.get('saved_versions'), list):
-            data['saved_versions'] = [
-                ImageVersion(
-                    **{
-                        **v,
-                        'created_at': datetime.fromisoformat(v['created_at']) if isinstance(v.get('created_at'), str) else v.get('created_at'),
-                        'saved_at': datetime.fromisoformat(v['saved_at']) if isinstance(v.get('saved_at'), str) else v.get('saved_at'),
-                        'parameters': StagingParameters(**v['parameters']) if isinstance(v.get('parameters'), dict) else v.get('parameters')
-                    }
-                )
-                for v in data['saved_versions']
-            ]
         
         return cls(**data)
